@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="az">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex,nofollow" />
+  <title>NeoPos — daxili tenant quraşdırması</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, sans-serif; margin: 0; padding: 24px; background: #f1f5f9; color: #0f172a; }
+    .wrap { max-width: 420px; margin: 0 auto; background: #fff; border-radius: 16px; padding: 24px; border: 1px solid #e2e8f0; }
+    h1 { font-size: 1.1rem; margin: 0 0 8px; }
+    .sub { font-size: 0.75rem; color: #64748b; line-height: 1.45; margin-bottom: 20px; }
+    label { display: block; font-size: 0.65rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.08em; color: #94a3b8; margin-bottom: 6px; }
+    input { width: 100%; padding: 10px 12px; border: 1px solid #e2e8f0; border-radius: 12px; font-size: 0.9rem; margin-bottom: 14px; }
+    button { width: 100%; padding: 14px; border: 0; border-radius: 12px; background: #0200fe; color: #fff; font-weight: 800; font-size: 0.7rem; letter-spacing: 0.12em; text-transform: uppercase; cursor: pointer; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .err { background: #fef2f2; color: #991b1b; padding: 12px; border-radius: 12px; font-size: 0.8rem; margin-bottom: 14px; }
+    .ok { background: #ecfdf5; color: #065f46; padding: 12px; border-radius: 12px; font-size: 0.8rem; margin-bottom: 14px; }
+    code { font-size: 0.75rem; word-break: break-all; background: #f8fafc; padding: 2px 6px; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Daxili: şirkət + admin</h1>
+    <p class="sub">
+      Bu səhifə yalnız serverdə təyin olunmuş <strong>NeoPos:TenantBootstrapSecret</strong> ilə işləyir.
+      Terminal tətbiqində deyil — Boss / idarə panelindən link verməyin; yalnız siz bilməli olduğunuz URL.
+    </p>
+    <div id="msg"></div>
+    <form id="f">
+      <label>Təhlükəsizlik açarı</label>
+      <input id="setupSecret" type="password" required autocomplete="off" />
+      <label>Şirkət adı</label>
+      <input id="companyName" type="text" required />
+      <label>Admin rol adı (IsAdmin)</label>
+      <input id="adminRoleName" type="text" value="Administrator" />
+      <label>Admin tam adı</label>
+      <input id="adminFullName" type="text" required />
+      <label>İstifadəçi adı</label>
+      <input id="adminUsername" type="text" required autocomplete="username" />
+      <label>Şifrə</label>
+      <input id="adminPassword" type="password" required autocomplete="new-password" />
+      <label>Terminal PIN (istəyə bağlı, 4–10 rəqəm)</label>
+      <input id="adminPinCode" type="text" inputmode="numeric" pattern="[0-9]*" placeholder="məs. 1234" />
+      <button type="submit" id="btn">Yarat</button>
+    </form>
+    <div id="result" style="display:none;margin-top:16px;font-size:0.8rem;">
+      <p><strong>Şirkət ID</strong> (terminalda station): <code id="cid"></code></p>
+      <p>JWT və tam cavab brauzer konsolunda və ya şəbəkə tabında görünür.</p>
+    </div>
+  </div>
+  <script>
+    (function () {
+      var apiBase = window.location.origin.replace(/\/$/, '') + '/api';
+      var msg = document.getElementById('msg');
+      var f = document.getElementById('f');
+      var btn = document.getElementById('btn');
+
+      function showErr(t) {
+        msg.innerHTML = '<div class="err">' + (t || 'Xəta') + '</div>';
+      }
+      function showOk(t) {
+        msg.innerHTML = '<div class="ok">' + (t || 'OK') + '</div>';
+      }
+
+      f.addEventListener('submit', function (e) {
+        e.preventDefault();
+        msg.innerHTML = '';
+        btn.disabled = true;
+        var pin = (document.getElementById('adminPinCode').value || '').trim();
+        var body = {
+          setupSecret: document.getElementById('setupSecret').value.trim(),
+          companyName: document.getElementById('companyName').value.trim(),
+          adminRoleName: (document.getElementById('adminRoleName').value || '').trim() || 'Administrator',
+          adminFullName: document.getElementById('adminFullName').value.trim(),
+          adminUsername: document.getElementById('adminUsername').value.trim(),
+          adminPassword: document.getElementById('adminPassword').value,
+          adminPinCode: pin.length ? pin : null
+        };
+        fetch(apiBase + '/Auth/tenant-bootstrap', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        })
+          .then(function (r) {
+            return r.json().then(function (j) {
+              if (!r.ok) throw new Error(j.message || j.Message || 'Sorğu uğursuz');
+              return j;
+            });
+          })
+          .then(function (data) {
+            showOk('Hazırdır: ' + (data.companyName || ''));
+            document.getElementById('result').style.display = 'block';
+            document.getElementById('cid').textContent = data.companyId || '';
+            console.log('tenant-bootstrap response', data);
+          })
+          .catch(function (err) {
+            showErr(err.message || String(err));
+          })
+          .finally(function () {
+            btn.disabled = false;
+          });
+      });
+    })();
+  </script>
+</body>
+</html>
