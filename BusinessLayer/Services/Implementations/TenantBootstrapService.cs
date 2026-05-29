@@ -90,9 +90,14 @@ public class TenantBootstrapService : ITenantBootstrapService
         var roleId = Guid.NewGuid();
         var userId = Guid.NewGuid();
 
+        var tenantKey = (request.TenantKey ?? string.Empty).Trim();
+        if (string.IsNullOrEmpty(tenantKey))
+            tenantKey = slug; // fallback: use slug as tenant key if not provided
+
         var company = new Company
         {
             Id = companyId,
+            TenantKey = tenantKey,
             NameAz = companyName,
             NameEn = companyName,
             NameRu = companyName,
@@ -105,6 +110,7 @@ public class TenantBootstrapService : ITenantBootstrapService
             IsActive = true,
             CreatedAt = now,
             CreatedBy = "TenantBootstrap",
+            IsSynced = true,
         };
 
         var role = new Role
@@ -118,6 +124,7 @@ public class TenantBootstrapService : ITenantBootstrapService
             Permissions = [],
             CreatedAt = now,
             CreatedBy = "TenantBootstrap",
+            IsSynced = true,
         };
 
         var user = new User
@@ -127,11 +134,12 @@ public class TenantBootstrapService : ITenantBootstrapService
             RoleId = roleId,
             FullName = fullName,
             Username = username,
-            PasswordHash = password,
+            PasswordHash = BCrypt.Net.BCrypt.HashPassword(password),
             PinCode = pin,
             IsActive = true,
             CreatedAt = now,
             CreatedBy = "TenantBootstrap",
+            IsSynced = true,
         };
 
         await using var tx = await _context.Database.BeginTransactionAsync();

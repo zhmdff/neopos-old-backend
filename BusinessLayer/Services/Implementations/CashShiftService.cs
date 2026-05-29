@@ -227,7 +227,10 @@ public class CashShiftService : ICashShiftService
         try
         {
             var company = await _context.Companies.AsNoTracking().FirstOrDefaultAsync(c => c.Id == shift.CompanyId);
-            if (company != null && company.CashShiftPrintReportOnClose && !string.IsNullOrEmpty(company.CashierPrinterTarget))
+            if (company != null
+                && company.CashShiftPrintReportOnClose
+                && BusinessLayer.Printing.PrinterTargetParser.TryParseNetworkTarget(
+                    company.CashierPrinterTarget, out var ip, out var port, out _))
             {
                 var allClosedOrders = await _context.OrderHeaders
                     .Where(o => o.CompanyId == shift.CompanyId && o.CashShiftId == shift.Id && o.IsClosed)
@@ -244,10 +247,6 @@ public class CashShiftService : ICashShiftService
                 
                 var (shiftCash, shiftCard) = OrderPaymentNet.ReconcileReportPaymentTotals(
                     shiftRevenue, shiftCashRaw, shiftCardRaw, shiftCustomSum);
-
-                var parts = company.CashierPrinterTarget.Split(':');
-                var ip = parts[0];
-                var port = parts.Length > 1 && int.TryParse(parts[1], out var p) ? p : 9100;
 
                 var bytes = _tcpPrinterService.GenerateShiftReportEscPos(company, shift, shiftCash, shiftCard, shiftRevenue, allClosedOrders.Count);
                 await _tcpPrinterService.SendToPrinterAsync(ip, port, bytes);

@@ -17,4 +17,10 @@ public class TenantBootstrapRequestDto
 
     /// <summary>Terminal PIN (məs. 4 rəqəm). Boş ola bilər — sonra təyin edilir.</summary>
     public string? AdminPinCode { get; set; }
+
+    /// <summary>
+    /// Tenant-in unikal açarı (tenant device appsettings-də NeoPos:TenantKey ilə uyğun olmalıdır).
+    /// Boş buraxılarsa, avtomatik olaraq şirkətin slug-ından yaradılır.
+    /// </summary>
+    public string? TenantKey { get; set; }
 }

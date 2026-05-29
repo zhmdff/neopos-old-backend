@@ -58,6 +58,7 @@ public class RoleService : IRoleService
         role.CreatedAt = DateTime.UtcNow;
         role.CreatedBy = "System";
         role.CompanyId = dto.CompanyId; // Məcburi mənimsətmə
+        role.IsSynced = false;
 
         await _context.Roles.AddAsync(role);
         await _context.SaveChangesAsync();
@@ -86,6 +87,7 @@ public class RoleService : IRoleService
         role.Permissions = dto.Permissions?.ToArray() ?? Array.Empty<int>();
         role.LastModifiedAt = DateTime.UtcNow;
         role.LastModifiedBy = "System";
+        role.IsSynced = false;
 
         _context.Roles.Update(role);
         await _context.SaveChangesAsync();

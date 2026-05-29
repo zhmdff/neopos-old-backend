@@ -33,6 +33,10 @@ try
 
     // 1. Servislerin Qeydiyyatı
     builder.Services.AddHttpClient();
+    builder.Services.AddHttpClient("NeoPosMediaSync", client =>
+    {
+        client.Timeout = TimeSpan.FromMinutes(10);
+    });
     builder.Services.RegisterDAL(builder.Configuration);
     builder.Services.AddBlServices(builder.Configuration);
     builder.Services.AddScoped<NeoPos.WebAPI.Services.TenantBootstrapService>();

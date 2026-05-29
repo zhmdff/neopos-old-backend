@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore;
 using DAL.Server.Context;
 using Domain.Common.Entities;
 using Application.Interfaces;
+using BusinessLayer.Utilities;
 
 namespace BusinessLayer.Services.Implementations;
 
@@ -31,11 +32,12 @@ public class UserService : IUserService
 
         var user = _mapper.Map<User>(dto);
 
-        user.PasswordHash = dto.Password; // Qeyd: Real layihədə BCrypt və ya Argon2 istifadə etməlisən
+        user.PasswordHash = PasswordHashHelper.Hash(dto.Password);
         user.CreatedAt = DateTime.UtcNow;
         user.CreatedBy = "System";
         user.IsActive = true;
         user.CompanyId = dto.CompanyId;
+        user.IsSynced = false;
 
         await _context.Users.AddAsync(user);
         await _context.SaveChangesAsync();
@@ -55,10 +57,11 @@ public class UserService : IUserService
         _mapper.Map(dto, user);
 
         if (!string.IsNullOrWhiteSpace(dto.Password))
-            user.PasswordHash = dto.Password.Trim();
+            user.PasswordHash = PasswordHashHelper.Hash(dto.Password);
 
         user.LastModifiedAt = DateTime.UtcNow;
         user.LastModifiedBy = "System";
+        user.IsSynced = false;
 
         _context.Users.Update(user);
         await _context.SaveChangesAsync();

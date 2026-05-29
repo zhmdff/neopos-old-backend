@@ -1,6 +1,7 @@
 using BusinessLayer.DTOs.Audit;
 using BusinessLayer.DTOs.Kitchen;
 using BusinessLayer.Hubs;
+using BusinessLayer.Printing;
 using BusinessLayer.Services.Abstractions;
 using BusinessLayer.Utilities;
 using DAL.Server.Context;
@@ -282,6 +283,10 @@ public class KitchenService : IKitchenService
         var tableName = orderHeader.Table?.NameAz ?? "";
         var hallName = orderHeader.Table?.Hall?.NameAz ?? "";
 
+        var company = await _context.Companies
+            .AsNoTracking()
+            .FirstOrDefaultAsync(c => c.Id == companyId);
+
         // --- DIRECT BACKEND PRINTING (LAN) ---
         foreach (var group in groups)
         {
@@ -289,13 +294,19 @@ public class KitchenService : IKitchenService
             {
                 try
                 {
-                    var parts = group.PrinterValue.Split(':');
-                    var ip = parts[0];
-                    var port = parts.Length > 1 && int.TryParse(parts[1], out var p) ? p : 9100;
+                    if (!PrinterTargetParser.TryParseNetworkTarget(group.PrinterValue, out var ip, out var port, out var beepMode))
+                        continue;
 
                     var bytes = _tcpPrinterService.GenerateKitchenEscPos(
-                        group.WorkshopName, hallName, tableName, orderHeader.WaiterName ?? "", group.Items);
-                    
+                        company?.ReceiptDesignSettingsJson,
+                        group.WorkshopName,
+                        hallName,
+                        tableName,
+                        orderHeader.WaiterName ?? "",
+                        orderHeader.OpenTime,
+                        group.Items,
+                        beepMode);
+
                     await _tcpPrinterService.SendToPrinterAsync(ip, port, bytes);
                     group.PrinterType = "BackendHandled";
                 }

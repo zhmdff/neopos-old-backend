@@ -3,6 +3,7 @@ using Domain.Common;
 using Domain.Common.Entities;
 using Domain.Entities;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 
 namespace NeoPos.WebAPI.Services;
 
@@ -100,6 +101,18 @@ public class DatabaseSyncService : BackgroundService
         var lastSync = metadata.LastSuccessfulSyncAt.Value;
         var syncStartTime = DateTime.UtcNow;
 
+        // Master company row (e.g. from create_tenant.py) may use a different Id than local bootstrap.
+        var masterCompany = await remoteDb.Companies
+            .AsNoTracking()
+            .FirstOrDefaultAsync(c => c.TenantKey == company.TenantKey, stoppingToken);
+        var remoteCompanyId = masterCompany?.Id ?? company.Id;
+        if (masterCompany != null && masterCompany.Id != company.Id)
+        {
+            _logger.LogInformation(
+                "Sync uses master CompanyId {MasterId} (local {LocalId}, TenantKey {TenantKey}).",
+                masterCompany.Id, company.Id, company.TenantKey);
+        }
+
         _logger.LogInformation("Starting bi-directional sync cycle. Last sync: {LastSync}", lastSync);
 
         var syncOrder = new List<Type>
@@ -155,38 +168,31 @@ public class DatabaseSyncService : BackgroundService
 
             if (typeof(BaseEntity).IsAssignableFrom(entityType))
             {
-                await InvokeSyncTableAsync(localDb, remoteDb, entityType, company.Id, lastSync, stoppingToken);
+                await InvokeSyncTableAsync(localDb, remoteDb, entityType, company.Id, remoteCompanyId, lastSync, stoppingToken);
             }
         }
 
-        // --- MEDIA SYNC (Perfect Sync for Images) ---
+        // --- MEDIA SYNC: wwwroot/uploads (pull from master + push new local files) ---
         try
         {
-            var masterUrl = _configuration.GetValue<string>("ConnectionStrings:RemotePostgresLocal")?
-                .Split(';').FirstOrDefault(p => p.StartsWith("Host=", StringComparison.OrdinalIgnoreCase))?
-                .Replace("Host=", "");
-            
-            var masterWebBase = _configuration.GetValue<string>("Sync:MasterWebBaseUrl") 
-                ?? $"http://{masterUrl}:5051";
+            var masterWebBase = ResolveMasterWebBaseUrl();
+            var mediaPaths = await MediaPathCollector.CollectFromDatabasesAsync(
+                localDb, remoteDb, company.Id, remoteCompanyId, stoppingToken);
+            var uploadSecret = _configuration["Sync:MediaUploadSecret"]?.Trim();
+            if (string.IsNullOrEmpty(uploadSecret))
+                uploadSecret = _configuration["NeoPos:TenantBootstrapSecret"]?.Trim();
 
-            var imagePaths = new List<string?>();
-            
-            var c = await localDb.Companies.AsNoTracking().FirstOrDefaultAsync(stoppingToken);
-            if (c != null)
+            await mediaSync.SyncUploadsAsync(new MediaSyncRequest
             {
-                imagePaths.Add(c.Logo);
-                imagePaths.Add(c.PosLockScreenImage);
-                imagePaths.Add(c.CustomerDisplayLockScreenImage);
-            }
-
-            imagePaths.AddRange(await localDb.Categories.AsNoTracking().Select(x => x.ImageUrl).ToListAsync(stoppingToken));
-            imagePaths.AddRange(await localDb.Products.AsNoTracking().Select(x => x.ImageUrl).ToListAsync(stoppingToken));
-
-            await mediaSync.SyncMissingMediaAsync(masterWebBase, imagePaths, stoppingToken);
+                MasterWebBaseUrl = masterWebBase,
+                UploadSecret = uploadSecret,
+                DbReferencedPaths = mediaPaths.ToList(),
+                ScanLocalUploadsFolder = _configuration.GetValue("Sync:ScanLocalUploadsFolder", true),
+            }, stoppingToken);
         }
         catch (Exception ex)
         {
-            _logger.LogWarning("Media sync failed but data sync continued: {Msg}", ex.Message);
+            _logger.LogWarning(ex, "Media sync failed but data sync continued.");
         }
 
         metadata.LastSuccessfulSyncAt = syncStartTime;
@@ -196,7 +202,7 @@ public class DatabaseSyncService : BackgroundService
         _logger.LogInformation("Sync cycle completed successfully.");
     }
 
-    private async Task InvokeSyncTableAsync(AppDbContext localDb, RemoteDbContext remoteDb, Type entityType, Guid companyId, DateTime lastSync, CancellationToken stoppingToken)
+    private async Task InvokeSyncTableAsync(AppDbContext localDb, RemoteDbContext remoteDb, Type entityType, Guid localCompanyId, Guid remoteCompanyId, DateTime lastSync, CancellationToken stoppingToken)
     {
         var method = typeof(DatabaseSyncService)
             .GetMethod(nameof(SyncTableAsync), System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)
@@ -204,11 +210,11 @@ public class DatabaseSyncService : BackgroundService
 
         if (method != null)
         {
-            await (Task)method.Invoke(this, new object[] { localDb, remoteDb, companyId, lastSync, stoppingToken })!;
+            await (Task)method.Invoke(this, new object[] { localDb, remoteDb, localCompanyId, remoteCompanyId, lastSync, stoppingToken })!;
         }
     }
 
-    private async Task SyncTableAsync<T>(AppDbContext localDb, RemoteDbContext remoteDb, Guid companyId, DateTime lastSync, CancellationToken stoppingToken) where T : BaseEntity
+    private async Task SyncTableAsync<T>(AppDbContext localDb, RemoteDbContext remoteDb, Guid localCompanyId, Guid remoteCompanyId, DateTime lastSync, CancellationToken stoppingToken) where T : BaseEntity
     {
         var type = typeof(T);
 
@@ -229,7 +235,15 @@ public class DatabaseSyncService : BackgroundService
             typeof(PendingOrderLineDeleteConfirm)
         };
 
-        if (!bossManagedConfig.Contains(type) || type == typeof(Customer))
+        // Normally Boss-managed = pull-only; staff-created users/roles must still push to Neon.
+        var tenantCreatableBossEntities = new HashSet<Type> { typeof(User), typeof(Role) };
+        bool allowPush = !bossManagedConfig.Contains(type)
+                         || type == typeof(Customer)
+                         || tenantCreatableBossEntities.Contains(type);
+
+        var pushedThisCycle = new HashSet<Guid>();
+
+        if (allowPush)
         {
             var localItems = await localDb.Set<T>()
                 .AsNoTracking()
@@ -251,7 +265,10 @@ public class DatabaseSyncService : BackgroundService
                 .Where(x => x.IsSynced && !existingRemoteIds.Contains(x.Id))
                 .ToList();
 
-            var itemsToPush = unsyncedItems.Concat(missingFromRemote).ToList();
+            // Staff POS data: only push rows still marked unsynced (avoid re-INSERT duplicate PK on Neon).
+            var itemsToPush = staffManagedTransactions.Contains(type)
+                ? unsyncedItems
+                : unsyncedItems.Concat(missingFromRemote).ToList();
 
             if (itemsToPush.Any())
             {
@@ -259,23 +276,42 @@ public class DatabaseSyncService : BackgroundService
 
                 foreach (var item in itemsToPush)
                 {
-                    var remoteItem = existingRemoteItems.FirstOrDefault(x => x.Id == item.Id);
-                    if (remoteItem == null)
+                    if (item is AuditableCompanyEntity companyEntity
+                        && companyEntity.CompanyId == localCompanyId
+                        && remoteCompanyId != localCompanyId)
                     {
-                        item.IsSynced = true;
-                        remoteDb.Set<T>().Add(item);
+                        companyEntity.CompanyId = remoteCompanyId;
                     }
-                    else
+
+                    await UpsertOnRemoteAsync(remoteDb, item, existingRemoteItems, stoppingToken);
+                }
+
+                try
+                {
+                    await remoteDb.SaveChangesAsync(stoppingToken);
+                }
+                catch (DbUpdateException ex) when (IsPostgresUniqueViolation(ex))
+                {
+                    _logger.LogWarning(ex, "Push conflict for {Table}; retrying row-by-row upsert.", type.Name);
+                    remoteDb.ChangeTracker.Clear();
+                    foreach (var item in itemsToPush)
                     {
-                        remoteDb.Entry(remoteItem).CurrentValues.SetValues(item);
+                        if (item is AuditableCompanyEntity companyEntity
+                            && companyEntity.CompanyId == localCompanyId
+                            && remoteCompanyId != localCompanyId)
+                        {
+                            companyEntity.CompanyId = remoteCompanyId;
+                        }
+
+                        await UpsertOnRemoteAsync(remoteDb, item, null, stoppingToken);
+                        await remoteDb.SaveChangesAsync(stoppingToken);
+                        remoteDb.ChangeTracker.Clear();
                     }
                 }
-                
-                await remoteDb.SaveChangesAsync(stoppingToken);
 
-                var idsToMarkSynced = itemsToPush.Select(x => x.Id).ToList();
+                pushedThisCycle = itemsToPush.Select(x => x.Id).ToHashSet();
                 await localDb.Set<T>()
-                    .Where(x => idsToMarkSynced.Contains(x.Id))
+                    .Where(x => pushedThisCycle.Contains(x.Id))
                     .ExecuteUpdateAsync(s => s.SetProperty(b => b.IsSynced, true), stoppingToken);
             }
         }
@@ -291,10 +327,12 @@ public class DatabaseSyncService : BackgroundService
                     .ToListAsync(stoppingToken);
 
                 var filteredRemoteData = remoteModifiedItems.Where(x => {
+                    if (pushedThisCycle.Contains(x.Id))
+                        return false;
                     var prop = x.GetType().GetProperty("CompanyId");
                     if (prop == null) return true; 
                     var val = prop.GetValue(x);
-                    return val is Guid id && id == companyId;
+                    return val is Guid id && (id == remoteCompanyId || id == localCompanyId);
                 }).Cast<T>().ToList();
 
                 if (filteredRemoteData.Any())
@@ -324,5 +362,47 @@ public class DatabaseSyncService : BackgroundService
                 }
             }
         }
+    }
+
+    private string ResolveMasterWebBaseUrl()
+    {
+        var configured = _configuration["Sync:MasterWebBaseUrl"]?.Trim();
+        if (!string.IsNullOrEmpty(configured))
+            return MediaSyncService.NormalizeWebBase(configured);
+
+        var env = Environment.GetEnvironmentVariable("NEOPOS_MASTER_WEB_URL")?.Trim();
+        if (!string.IsNullOrEmpty(env))
+            return MediaSyncService.NormalizeWebBase(env);
+
+        _logger.LogWarning(
+            "Sync:MasterWebBaseUrl is not set; media pull/push may fail. Example: https://neopos.runasp.net");
+        return MediaSyncService.NormalizeWebBase("https://neopos.runasp.net");
+    }
+
+    private static bool IsPostgresUniqueViolation(DbUpdateException ex)
+    {
+        for (var inner = ex.InnerException; inner != null; inner = inner.InnerException)
+        {
+            if (inner is PostgresException pg && pg.SqlState == PostgresErrorCodes.UniqueViolation)
+                return true;
+        }
+        return false;
+    }
+
+    private static async Task UpsertOnRemoteAsync<T>(
+        RemoteDbContext remoteDb,
+        T item,
+        List<T>? cachedRemoteRows,
+        CancellationToken stoppingToken) where T : BaseEntity
+    {
+        var remoteItem = cachedRemoteRows?.FirstOrDefault(x => x.Id == item.Id);
+        if (remoteItem == null)
+            remoteItem = await remoteDb.Set<T>().FindAsync(new object[] { item.Id }, stoppingToken);
+
+        item.IsSynced = true;
+        if (remoteItem == null)
+            remoteDb.Set<T>().Add(item);
+        else
+            remoteDb.Entry(remoteItem).CurrentValues.SetValues(item);
     }
 }

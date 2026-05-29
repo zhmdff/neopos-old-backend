@@ -3,6 +3,7 @@ using BusinessLayer.DTOs.Auth;
 using BusinessLayer.ExternalServices.Abstractions;
 using BusinessLayer.Services.Abstractions;
 using BusinessLayer.Utilities;
+using Domain.Common.Entities;
 using DAL.Server.Context;
 using Microsoft.EntityFrameworkCore;
 using System.Linq;
@@ -32,17 +33,21 @@ public class AuthService : IAuthService
         var users = await _context.Users
             .Include(u => u.Role)
             .Include(u => u.Company)
-            .Where(u => u.Username == username && u.IsActive && !u.IsDeleted)
+            .Where(u => u.Username.ToLower() == username.ToLower() && u.IsActive && !u.IsDeleted)
             .ToListAsync();
 
-        var matches = users.Where(u => BCrypt.Net.BCrypt.Verify(password, u.PasswordHash)).ToList();
-        var primary = matches.FirstOrDefault();
-
-        if (primary == null)
+        if (users.Count == 0)
             throw new Exception("İstifadəçi adı və ya şifrə yanlışdır.");
 
+        var matches = users.Where(u => PasswordHashHelper.Verify(password, u.PasswordHash)).ToList();
+
+        if (matches.Count == 0)
+            throw new Exception("İstifadəçi adı və ya şifrə yanlışdır.");
+
+        await UpgradeLegacyPasswordHashesAsync(matches, password);
+
         // Default şirkət: admin olanı üstün tut (yoxdursa birinci)
-        primary = matches
+        var primary = matches
             .OrderByDescending(u => u.Role != null && u.Role.IsAdmin)
             .ThenBy(u => u.Company?.NameAz)
             .First();
@@ -86,6 +91,24 @@ public class AuthService : IAuthService
             .ToList();
 
         return response;
+    }
+
+    /// <summary>Users created via Users API before BCrypt fix stored plaintext — re-hash on successful login.</summary>
+    private async Task UpgradeLegacyPasswordHashesAsync(IReadOnlyList<User> users, string plainPassword)
+    {
+        var upgraded = false;
+        foreach (var user in users)
+        {
+            if (PasswordHashHelper.IsBcryptHash(user.PasswordHash))
+                continue;
+
+            user.PasswordHash = PasswordHashHelper.Hash(plainPassword);
+            user.IsSynced = false;
+            upgraded = true;
+        }
+
+        if (upgraded)
+            await _context.SaveChangesAsync();
     }
 
     public async Task<LoginResponseDTO> PinLoginAsync(PinLoginRequestDTO request)

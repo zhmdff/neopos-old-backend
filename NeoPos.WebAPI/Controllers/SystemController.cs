@@ -3,6 +3,8 @@ using NeoPos.WebAPI.Services;
 
 namespace NeoPos.WebAPI.Controllers;
 
+/// <summary>Ingest upload files from tenant terminals during sync (master / cloud).</summary>
+
 /// <summary>Ümumi sistem məlumatı (terminal üçün server vaxtı və s.).</summary>
 [ApiController]
 [Route("api/[controller]")]
@@ -10,12 +12,22 @@ public class SystemController : ControllerBase
 {
     private readonly DAL.Server.Context.AppDbContext _localDb;
     private readonly DAL.Server.Context.RemoteDbContext? _remoteDb;
+    private readonly IWebHostEnvironment _env;
+    private readonly IConfiguration _configuration;
+    private readonly ILogger<SystemController> _logger;
 
-    public SystemController(DAL.Server.Context.AppDbContext localDb, IServiceProvider serviceProvider)
+    public SystemController(
+        DAL.Server.Context.AppDbContext localDb,
+        IServiceProvider serviceProvider,
+        IWebHostEnvironment env,
+        IConfiguration configuration,
+        ILogger<SystemController> logger)
     {
         _localDb = localDb;
-        // RemoteDbContext is only registered in master mode; tenants don't have it.
         _remoteDb = serviceProvider.GetService<DAL.Server.Context.RemoteDbContext>();
+        _env = env;
+        _configuration = configuration;
+        _logger = logger;
     }
 
     /// <summary>
@@ -115,9 +127,72 @@ public class SystemController : ControllerBase
         return Ok(new { isOutageSimulated = enabled });
     }
 
-    [HttpPost("trigger-sync")]
-    public async Task<IActionResult> TriggerSync([FromServices] DatabaseSyncService syncService)
+    /// <summary>
+    /// Tenant sync pushes binary files here (PUT). Requires <c>X-NeoPos-Sync-Secret</c> matching
+    /// <c>Sync:MediaUploadSecret</c> or <c>NeoPos:TenantBootstrapSecret</c> on the master server.
+    /// </summary>
+    [HttpPut("sync-media")]
+    [RequestSizeLimit(52_428_800)]
+    public async Task<IActionResult> PutSyncMedia(
+        [FromHeader(Name = "X-NeoPos-Sync-Secret")] string? secret,
+        [FromQuery] string path,
+        CancellationToken cancellationToken)
     {
+        if (!ValidateMediaSyncSecret(secret))
+            return Unauthorized(new { message = "Invalid sync secret." });
+
+        var normalized = MediaPathCollector.NormalizeOne(path);
+        if (normalized == null)
+            return BadRequest(new { message = "Path must be under /uploads/ and must not contain '..'." });
+
+        var webRoot = _env.WebRootPath ?? Path.Combine(Directory.GetCurrentDirectory(), "wwwroot");
+        var localPath = MediaPathCollector.ToLocalFilePath(webRoot, normalized);
+
+        try
+        {
+            var dir = Path.GetDirectoryName(localPath);
+            if (dir != null && !Directory.Exists(dir))
+                Directory.CreateDirectory(dir);
+
+            await using (var fs = System.IO.File.Create(localPath))
+            {
+                await Request.Body.CopyToAsync(fs, cancellationToken);
+            }
+
+            _logger.LogInformation("Sync media received: {Path}", normalized);
+            return Ok(new { path = normalized });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to save sync media: {Path}", normalized);
+            return StatusCode(500, new { message = "Could not save file.", error = ex.Message });
+        }
+    }
+
+    private bool ValidateMediaSyncSecret(string? secret)
+    {
+        var expected = _configuration["Sync:MediaUploadSecret"]?.Trim();
+        if (string.IsNullOrEmpty(expected))
+            expected = _configuration["NeoPos:TenantBootstrapSecret"]?.Trim();
+        if (string.IsNullOrEmpty(expected))
+            return false;
+        return string.Equals(expected, secret?.Trim(), StringComparison.Ordinal);
+    }
+
+    [HttpPost("trigger-sync")]
+    public async Task<IActionResult> TriggerSync([FromServices] IServiceProvider serviceProvider)
+    {
+        var syncService = serviceProvider.GetService<DatabaseSyncService>();
+        if (syncService == null)
+        {
+            return BadRequest(new
+            {
+                message = "Sinxronizasiya yalnız tenant rejimində (lokal SQLite + Neon) işləyir. " +
+                          "POS terminalında NeoPos:Mode=tenant və ya NEOPOS_MODE=tenant təyin edin; " +
+                          "master rejimi yalnız bulud server üçündür.",
+            });
+        }
+
         try
         {
             await syncService.TriggerSyncAsync(HttpContext.RequestAborted);

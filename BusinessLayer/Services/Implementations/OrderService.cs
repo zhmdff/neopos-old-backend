@@ -930,20 +930,22 @@ public class OrderService : IOrderService
             try
             {
                 var company = await _context.Companies.AsNoTracking().FirstOrDefaultAsync(c => c.Id == companyId);
-                if (company != null && !string.IsNullOrEmpty(company.CashierPrinterTarget))
+                if (company != null
+                    && BusinessLayer.Printing.PrinterTargetParser.TryParseNetworkTarget(
+                        company.CashierPrinterTarget, out var ip, out var port, out _))
                 {
-                    var parts = company.CashierPrinterTarget.Split(':');
-                    var ip = parts[0];
-                    var port = parts.Length > 1 && int.TryParse(parts[1], out var p) ? p : 9100;
-
                     var printOrder = await _context.OrderHeaders
                         .Include(o => o.Table)
+                            .ThenInclude(t => t.Hall)
                         .Include(o => o.OrderDetails)
+                        .Include(o => o.Customer)
+                        .Include(o => o.CustomPaymentMethod)
                         .FirstOrDefaultAsync(o => o.Id == dto.OrderId);
 
                     if (printOrder != null)
                     {
-                        var bytes = _tcpPrinterService.GenerateKassaReceiptEscPos(company, printOrder, printOrder.OrderDetails.ToList());
+                        var bytes = _tcpPrinterService.GenerateKassaReceiptEscPos(
+                            company, printOrder, printOrder.OrderDetails.ToList());
                         await _tcpPrinterService.SendToPrinterAsync(ip, port, bytes);
                     }
                 }
