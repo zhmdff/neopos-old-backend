@@ -27,9 +27,11 @@ CultureInfo.DefaultThreadCurrentCulture = cultureInfo;
 CultureInfo.DefaultThreadCurrentUICulture = cultureInfo;
 
 // 1. Servislerin Qeydiyyatı
+builder.Services.AddHttpClient();
 builder.Services.RegisterDAL(builder.Configuration);
 builder.Services.AddBlServices(builder.Configuration);
 builder.Services.AddScoped<NeoPos.WebAPI.Services.TenantBootstrapService>();
+builder.Services.AddScoped<NeoPos.WebAPI.Services.IMediaSyncService, NeoPos.WebAPI.Services.MediaSyncService>();
 builder.Services.AddHostedService<NeoPos.WebAPI.Services.AutoCashShiftHostedService>();
 builder.Services.AddHostedService<NeoPos.WebAPI.Services.BossTelegramLineDeleteCallbackHostedService>();
 
@@ -166,8 +168,8 @@ using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
     
-    // Auto-create SQLite database and schema if it doesn't exist
-    await db.Database.EnsureCreatedAsync();
+    // Use MigrateAsync instead of EnsureCreatedAsync to support __EFMigrationsHistory
+    await db.Database.MigrateAsync();
 
     // Ensure remote PostgreSQL is also initialized
     await NeoPos.WebAPI.Services.RemoteDatabaseInitializer.InitializeAsync(app.Services);

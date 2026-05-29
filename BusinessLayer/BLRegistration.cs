@@ -49,5 +49,6 @@ public static class BLRegistration
         services.AddScoped<IBossTelegramChatService, BossTelegramChatService>();
         services.AddScoped<IBossTelegramNotifyService, BossTelegramNotifyService>();
         services.AddScoped<IPendingLineDeleteConfirmService, PendingLineDeleteConfirmService>();
+        services.AddScoped<ITcpPrinterService, TcpPrinterService>();
     }
 }

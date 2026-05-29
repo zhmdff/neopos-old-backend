@@ -21,18 +21,21 @@ public class OrderService : IOrderService
     private readonly IMapper _mapper;
     private readonly IAuditLogService _auditLogService;
     private readonly IHallTimeDiscountRuleService _hallTimeDiscountRuleService;
+    private readonly ITcpPrinterService _tcpPrinterService;
     private DateTime AzTime => DateTime.SpecifyKind(DateTime.UtcNow.AddHours(4), DateTimeKind.Unspecified);
 
     public OrderService(
         AppDbContext context,
         IMapper mapper,
         IAuditLogService auditLogService,
-        IHallTimeDiscountRuleService hallTimeDiscountRuleService)
+        IHallTimeDiscountRuleService hallTimeDiscountRuleService,
+        ITcpPrinterService tcpPrinterService)
     {
         _context = context;
         _mapper = mapper;
         _auditLogService = auditLogService;
         _hallTimeDiscountRuleService = hallTimeDiscountRuleService;
+        _tcpPrinterService = tcpPrinterService;
     }
 
     /// <summary>Telegram/audit: trailing sıfırlar atılır (43.2000 → 43.2).</summary>
@@ -922,6 +925,34 @@ public class OrderService : IOrderService
             });
 
             await transaction.CommitAsync();
+
+            // --- DIRECT BACKEND RECEIPT PRINTING (LAN) ---
+            try
+            {
+                var company = await _context.Companies.AsNoTracking().FirstOrDefaultAsync(c => c.Id == companyId);
+                if (company != null && !string.IsNullOrEmpty(company.CashierPrinterTarget))
+                {
+                    var parts = company.CashierPrinterTarget.Split(':');
+                    var ip = parts[0];
+                    var port = parts.Length > 1 && int.TryParse(parts[1], out var p) ? p : 9100;
+
+                    var printOrder = await _context.OrderHeaders
+                        .Include(o => o.Table)
+                        .Include(o => o.OrderDetails)
+                        .FirstOrDefaultAsync(o => o.Id == dto.OrderId);
+
+                    if (printOrder != null)
+                    {
+                        var bytes = _tcpPrinterService.GenerateKassaReceiptEscPos(company, printOrder, printOrder.OrderDetails.ToList());
+                        await _tcpPrinterService.SendToPrinterAsync(ip, port, bytes);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Direct Kassa Print Error: {ex.Message}");
+            }
+
             return true;
         }
         catch (Exception ex)

@@ -1,0 +1,28 @@
+# Build artifacts
+bin/
+obj/
+publish/
+dist/
+out/
+
+# Dependencies
+node_modules/
+
+# Local data and secrets
+*.db
+*.db-shm
+*.db-wal
+data/
+.env
+.env.*
+!.env.example
+
+# IDEs
+.vs/
+.vscode/
+.idea/
+
+# Source control
+.git/
+.gitignore
+.dockerignore

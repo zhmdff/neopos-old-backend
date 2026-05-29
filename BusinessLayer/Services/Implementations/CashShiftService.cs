@@ -16,14 +16,16 @@ public class CashShiftService : ICashShiftService
     private readonly AppDbContext _context;
     private readonly IMapper _mapper;
     private readonly IAuditLogService _auditLogService;
+    private readonly ITcpPrinterService _tcpPrinterService;
 
     private DateTime AzTime => DateTime.UtcNow.AddHours(4);
 
-    public CashShiftService(AppDbContext context, IMapper mapper, IAuditLogService auditLogService)
+    public CashShiftService(AppDbContext context, IMapper mapper, IAuditLogService auditLogService, ITcpPrinterService tcpPrinterService)
     {
         _context = context;
         _mapper = mapper;
         _auditLogService = auditLogService;
+        _tcpPrinterService = tcpPrinterService;
     }
 
     private static string GenerateWaiterAccessCode()
@@ -220,6 +222,41 @@ public class CashShiftService : ICashShiftService
         shift.LastModifiedBy = user.Username;
 
         await _context.SaveChangesAsync();
+
+        // --- DIRECT BACKEND Z-REPORT PRINTING (LAN) ---
+        try
+        {
+            var company = await _context.Companies.AsNoTracking().FirstOrDefaultAsync(c => c.Id == shift.CompanyId);
+            if (company != null && company.CashShiftPrintReportOnClose && !string.IsNullOrEmpty(company.CashierPrinterTarget))
+            {
+                var allClosedOrders = await _context.OrderHeaders
+                    .Where(o => o.CompanyId == shift.CompanyId && o.CashShiftId == shift.Id && o.IsClosed)
+                    .ToListAsync();
+
+                var shiftRevenue = allClosedOrders.Sum(x => x.TotalAmount);
+                var shiftCashRaw = allClosedOrders.Sum(x =>
+                    OrderPaymentNet.NaqdKartReportGross(x.TotalAmount, x.BehAmount, x.ServiceAmount, x.PaidCash, x.PaidCard, x.CustomPaymentMethodId).Cash);
+                var shiftCardRaw = allClosedOrders.Sum(x =>
+                    OrderPaymentNet.NaqdKartReportGross(x.TotalAmount, x.BehAmount, x.ServiceAmount, x.PaidCash, x.PaidCard, x.CustomPaymentMethodId).Card);
+                var shiftCustomSum = allClosedOrders
+                    .Where(x => x.CustomPaymentMethodId.HasValue)
+                    .Sum(x => OrderPaymentNet.PayableAmount(x.TotalAmount, x.BehAmount));
+                
+                var (shiftCash, shiftCard) = OrderPaymentNet.ReconcileReportPaymentTotals(
+                    shiftRevenue, shiftCashRaw, shiftCardRaw, shiftCustomSum);
+
+                var parts = company.CashierPrinterTarget.Split(':');
+                var ip = parts[0];
+                var port = parts.Length > 1 && int.TryParse(parts[1], out var p) ? p : 9100;
+
+                var bytes = _tcpPrinterService.GenerateShiftReportEscPos(company, shift, shiftCash, shiftCard, shiftRevenue, allClosedOrders.Count);
+                await _tcpPrinterService.SendToPrinterAsync(ip, port, bytes);
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Direct Z-Report Print Error: {ex.Message}");
+        }
 
         if (dto.IsAutoSchedule)
         {

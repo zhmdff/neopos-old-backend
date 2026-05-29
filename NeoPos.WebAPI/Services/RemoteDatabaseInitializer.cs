@@ -19,9 +19,8 @@ public static class RemoteDatabaseInitializer
         {
             logger.LogInformation("Checking remote PostgreSQL database initialization...");
             
-            // This will create the database and all tables if they don't exist
-            // on the remote PostgreSQL server defined in connection strings.
-            await remoteDb.Database.EnsureCreatedAsync();
+            // Use MigrateAsync to ensure history table and migrations are applied
+            await remoteDb.Database.MigrateAsync();
             
             logger.LogInformation("Remote PostgreSQL database is ready.");
         }

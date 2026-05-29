@@ -17,15 +17,18 @@ public class KitchenService : IKitchenService
     private readonly AppDbContext _context;
     private readonly IHubContext<NotificationHub> _hubContext;
     private readonly IAuditLogService _auditLogService;
+    private readonly ITcpPrinterService _tcpPrinterService;
 
     public KitchenService(
         AppDbContext context,
         IHubContext<NotificationHub> hubContext,
-        IAuditLogService auditLogService)
+        IAuditLogService auditLogService,
+        ITcpPrinterService tcpPrinterService)
     {
         _context = context;
         _hubContext = hubContext;
         _auditLogService = auditLogService;
+        _tcpPrinterService = tcpPrinterService;
     }
 
     /// <summary>
@@ -279,7 +282,33 @@ public class KitchenService : IKitchenService
         var tableName = orderHeader.Table?.NameAz ?? "";
         var hallName = orderHeader.Table?.Hall?.NameAz ?? "";
 
-        if (broadcastPrintToTerminals && groups.Count > 0)
+        // --- DIRECT BACKEND PRINTING (LAN) ---
+        foreach (var group in groups)
+        {
+            if (group.PrinterType?.Equals("Network", StringComparison.OrdinalIgnoreCase) == true)
+            {
+                try
+                {
+                    var parts = group.PrinterValue.Split(':');
+                    var ip = parts[0];
+                    var port = parts.Length > 1 && int.TryParse(parts[1], out var p) ? p : 9100;
+
+                    var bytes = _tcpPrinterService.GenerateKitchenEscPos(
+                        group.WorkshopName, hallName, tableName, orderHeader.WaiterName ?? "", group.Items);
+                    
+                    await _tcpPrinterService.SendToPrinterAsync(ip, port, bytes);
+                    group.PrinterType = "BackendHandled";
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Direct Print Error for {group.WorkshopName}: {ex.Message}");
+                }
+            }
+        }
+
+        var broadcastGroups = groups.Where(g => g.PrinterType != "BackendHandled").ToList();
+
+        if (broadcastPrintToTerminals && broadcastGroups.Count > 0)
         {
             try
             {
@@ -292,7 +321,7 @@ public class KitchenService : IKitchenService
                         hallName,
                         waiterName = orderHeader.WaiterName ?? "",
                         openTime = orderHeader.OpenTime.ToString("o"),
-                        groups
+                        groups = broadcastGroups
                     });
             }
             catch (Exception ex)

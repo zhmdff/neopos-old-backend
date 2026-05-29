@@ -11,17 +11,19 @@ public class DatabaseSyncService : BackgroundService
     private readonly IServiceProvider _serviceProvider;
     private readonly IConfiguration _configuration;
     private readonly ILogger<DatabaseSyncService> _logger;
+    private readonly IMediaSyncService _mediaSync;
 
     private int _failCount = 0;
     private const int MaxBackoffMinutes = 60;
 
     public static bool IsOutageSimulated { get; set; } = false;
 
-    public DatabaseSyncService(IServiceProvider serviceProvider, IConfiguration configuration, ILogger<DatabaseSyncService> logger)
+    public DatabaseSyncService(IServiceProvider serviceProvider, IConfiguration configuration, ILogger<DatabaseSyncService> logger, IMediaSyncService mediaSync)
     {
         _serviceProvider = serviceProvider;
         _configuration = configuration;
         _logger = logger;
+        _mediaSync = mediaSync;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -161,6 +163,36 @@ public class DatabaseSyncService : BackgroundService
             }
         }
 
+        // --- MEDIA SYNC (Perfect Sync for Images) ---
+        try
+        {
+            var masterUrl = _configuration.GetValue<string>("ConnectionStrings:RemotePostgresLocal")?
+                .Split(';').FirstOrDefault(p => p.StartsWith("Host=", StringComparison.OrdinalIgnoreCase))?
+                .Replace("Host=", "");
+            
+            var masterWebBase = _configuration.GetValue<string>("Sync:MasterWebBaseUrl") 
+                ?? $"http://{masterUrl}:5051";
+
+            var imagePaths = new List<string?>();
+            
+            var c = await localDb.Companies.AsNoTracking().FirstOrDefaultAsync(stoppingToken);
+            if (c != null)
+            {
+                imagePaths.Add(c.Logo);
+                imagePaths.Add(c.PosLockScreenImage);
+                imagePaths.Add(c.CustomerDisplayLockScreenImage);
+            }
+
+            imagePaths.AddRange(await localDb.Categories.AsNoTracking().Select(x => x.ImageUrl).ToListAsync(stoppingToken));
+            imagePaths.AddRange(await localDb.Products.AsNoTracking().Select(x => x.ImageUrl).ToListAsync(stoppingToken));
+
+            await _mediaSync.SyncMissingMediaAsync(masterWebBase, imagePaths, stoppingToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning("Media sync failed but data sync continued: {Msg}", ex.Message);
+        }
+
         // Update Metadata
         metadata.LastSuccessfulSyncAt = syncStartTime;
         metadata.LastSyncStatus = "Success";
@@ -183,58 +215,73 @@ public class DatabaseSyncService : BackgroundService
 
     private async Task SyncTableAsync<T>(AppDbContext localDb, RemoteDbContext remoteDb, Guid companyId, DateTime lastSync, CancellationToken stoppingToken) where T : BaseEntity
     {
-        // PHASE 1: Push (Local -> Master)
-        var localItems = await localDb.Set<T>()
-            .AsNoTracking()
-            .ToListAsync(stoppingToken);
+        var type = typeof(T);
 
-        var unsyncedItems = localItems.Where(x => !x.IsSynced).ToList();
+        // AUTHORITY MATRIX: Define which tables are managed where
+        var bossManagedConfig = new HashSet<Type> { 
+            typeof(Company), typeof(Role), typeof(User), typeof(Hall), typeof(Table), 
+            typeof(Workshop), typeof(Category), typeof(Product), typeof(ProductWorkshop), 
+            typeof(ProductVariant), typeof(ProductSet), typeof(ProductSetItem), 
+            typeof(ProductSetChoiceGroup), typeof(ProductSetChoiceOption), 
+            typeof(QRMenuSetting), typeof(Warehouse), typeof(Supplier),
+            typeof(CompanyPaymentMethod), typeof(HallTimeDiscountRule)
+        };
 
-        // Find items that are marked synced locally but are absent from remote
-        var syncedLocalIds = localItems.Where(x => x.IsSynced).Select(x => x.Id).ToList();
-        
-        // Optimization: Fetch existing remote IDs in bulk to minimize round-trips
-        var existingRemoteItems = new List<T>();
-        if (localItems.Any())
+        var staffManagedTransactions = new HashSet<Type> {
+            typeof(CashShift), typeof(CashShiftExpense), typeof(OrderHeader), 
+            typeof(OrderDetail), typeof(KitchenOperation), typeof(OrderSplitPayment), 
+            typeof(Purchase), typeof(ProductStockHistory), typeof(AuditLog),
+            typeof(BossWebPushSubscription), typeof(BossTelegramChat), 
+            typeof(PendingOrderLineDeleteConfirm)
+        };
+
+        // PHASE 1: Push (Local -> Master) 
+        // Restricted: Don't push Boss-managed config (unless it's a new Customer or specifically allowed)
+        if (!bossManagedConfig.Contains(type) || type == typeof(Customer))
         {
-            var allLocalIds = localItems.Select(x => x.Id).ToList();
-            existingRemoteItems = await remoteDb.Set<T>()
-                .Where(x => allLocalIds.Contains(x.Id))
+            var localItems = await localDb.Set<T>()
+                .AsNoTracking()
                 .ToListAsync(stoppingToken);
-        }
 
-        var existingRemoteIds = existingRemoteItems.Select(x => x.Id).ToHashSet();
-        var missingFromRemote = localItems
-            .Where(x => x.IsSynced && !existingRemoteIds.Contains(x.Id))
-            .ToList();
+            var unsyncedItems = localItems.Where(x => !x.IsSynced).ToList();
+            var allLocalIds = localItems.Select(x => x.Id).ToList();
 
-        var itemsToPush = unsyncedItems.Concat(missingFromRemote).ToList();
-
-        if (itemsToPush.Any())
-        {
-            _logger.LogInformation("Pushing {Count} items for table {Table} ({Unsynced} unsynced, {Missing} missing from remote)",
-                itemsToPush.Count, typeof(T).Name, unsyncedItems.Count, missingFromRemote.Count);
-
-            foreach (var item in itemsToPush)
+            var existingRemoteItems = new List<T>();
+            if (allLocalIds.Any())
             {
-                var remoteItem = existingRemoteItems.FirstOrDefault(x => x.Id == item.Id);
-                if (remoteItem == null)
-                {
-                    item.IsSynced = true;
-                    remoteDb.Set<T>().Add(item);
-                }
-                else
-                {
-                    remoteDb.Entry(remoteItem).CurrentValues.SetValues(item);
-                }
+                existingRemoteItems = await remoteDb.Set<T>()
+                    .Where(x => allLocalIds.Contains(x.Id))
+                    .ToListAsync(stoppingToken);
             }
-            
-            await remoteDb.SaveChangesAsync(stoppingToken);
 
-            // Mark as synced locally in bulk
-            var idsToMarkSynced = itemsToPush.Where(x => !x.IsSynced).Select(x => x.Id).ToList();
-            if (idsToMarkSynced.Any())
+            var existingRemoteIds = existingRemoteItems.Select(x => x.Id).ToHashSet();
+            var missingFromRemote = localItems
+                .Where(x => x.IsSynced && !existingRemoteIds.Contains(x.Id))
+                .ToList();
+
+            var itemsToPush = unsyncedItems.Concat(missingFromRemote).ToList();
+
+            if (itemsToPush.Any())
             {
+                _logger.LogInformation("Pushing {Count} items for {Table}", itemsToPush.Count, type.Name);
+
+                foreach (var item in itemsToPush)
+                {
+                    var remoteItem = existingRemoteItems.FirstOrDefault(x => x.Id == item.Id);
+                    if (remoteItem == null)
+                    {
+                        item.IsSynced = true;
+                        remoteDb.Set<T>().Add(item);
+                    }
+                    else
+                    {
+                        remoteDb.Entry(remoteItem).CurrentValues.SetValues(item);
+                    }
+                }
+                
+                await remoteDb.SaveChangesAsync(stoppingToken);
+
+                var idsToMarkSynced = itemsToPush.Select(x => x.Id).ToList();
                 await localDb.Set<T>()
                     .Where(x => idsToMarkSynced.Contains(x.Id))
                     .ExecuteUpdateAsync(s => s.SetProperty(b => b.IsSynced, true), stoppingToken);
@@ -242,45 +289,49 @@ public class DatabaseSyncService : BackgroundService
         }
 
         // PHASE 2: Pull (Master -> Local)
-        if (typeof(AuditableEntity).IsAssignableFrom(typeof(T)))
+        // Restricted: Don't pull Staff-managed transactions (Boss only views them, doesn't edit them)
+        if (!staffManagedTransactions.Contains(type) || type == typeof(Customer))
         {
-            var remoteModifiedItems = await remoteDb.Set<T>()
-                .Cast<AuditableEntity>()
-                .Where(x => x.LastModifiedAt > lastSync || x.CreatedAt > lastSync)
-                .AsNoTracking()
-                .ToListAsync(stoppingToken);
-
-            var filteredRemoteData = remoteModifiedItems.Where(x => {
-                var prop = x.GetType().GetProperty("CompanyId");
-                if (prop == null) return true; 
-                var val = prop.GetValue(x);
-                return val is Guid id && id == companyId;
-            }).Cast<T>().ToList();
-
-            if (filteredRemoteData.Any())
+            if (typeof(AuditableEntity).IsAssignableFrom(type))
             {
-                _logger.LogInformation("Pulling {Count} updates for table {Table}", filteredRemoteData.Count, typeof(T).Name);
-                
-                var remoteIds = filteredRemoteData.Select(x => x.Id).ToList();
-                var localItemsToUpdate = await localDb.Set<T>()
-                    .Where(x => remoteIds.Contains(x.Id))
+                var remoteModifiedItems = await remoteDb.Set<T>()
+                    .Cast<AuditableEntity>()
+                    .Where(x => x.LastModifiedAt > lastSync || x.CreatedAt > lastSync)
+                    .AsNoTracking()
                     .ToListAsync(stoppingToken);
 
-                foreach (var remoteItem in filteredRemoteData)
-                {
-                    var localItem = localItemsToUpdate.FirstOrDefault(x => x.Id == remoteItem.Id);
-                    remoteItem.IsSynced = true; 
+                var filteredRemoteData = remoteModifiedItems.Where(x => {
+                    var prop = x.GetType().GetProperty("CompanyId");
+                    if (prop == null) return true; 
+                    var val = prop.GetValue(x);
+                    return val is Guid id && id == companyId;
+                }).Cast<T>().ToList();
 
-                    if (localItem == null)
+                if (filteredRemoteData.Any())
+                {
+                    _logger.LogInformation("Pulling {Count} updates for {Table}", filteredRemoteData.Count, type.Name);
+                    
+                    var remoteIds = filteredRemoteData.Select(x => x.Id).ToList();
+                    var localItemsToUpdate = await localDb.Set<T>()
+                        .Where(x => remoteIds.Contains(x.Id))
+                        .ToListAsync(stoppingToken);
+
+                    foreach (var remoteItem in filteredRemoteData)
                     {
-                        localDb.Set<T>().Add(remoteItem);
+                        var localItem = localItemsToUpdate.FirstOrDefault(x => x.Id == remoteItem.Id);
+                        remoteItem.IsSynced = true; 
+
+                        if (localItem == null)
+                        {
+                            localDb.Set<T>().Add(remoteItem);
+                        }
+                        else
+                        {
+                            localDb.Entry(localItem).CurrentValues.SetValues(remoteItem);
+                        }
                     }
-                    else if (localItem.IsSynced)
-                    {
-                        localDb.Entry(localItem).CurrentValues.SetValues(remoteItem);
-                    }
+                    await localDb.SaveChangesAsync(stoppingToken);
                 }
-                await localDb.SaveChangesAsync(stoppingToken);
             }
         }
     }
