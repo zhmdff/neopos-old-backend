@@ -1000,7 +1000,7 @@ public class OrderService : IOrderService
             if (user == null) throw new Exception("İstifadəçi tapılmadı.");
 
             var isAdmin = user.Role?.IsAdmin == true;
-            var perms = user.Role?.Permissions ?? new List<int>();
+            var perms = user.Role?.Permissions ?? Array.Empty<int>();
             if (!isAdmin && !perms.Contains((int)Permission.ViewArchive))
                 throw new Exception("Arxiv çekini yeniləmək üçün «Arxivi görə bilər» icazəsi lazımdır.");
 

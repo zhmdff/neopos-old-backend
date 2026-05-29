@@ -83,7 +83,7 @@ public class RoleService : IRoleService
         role.NameRu = translations.GetValueOrDefault("ru", dto.NameAz);
         role.NameEn = translations.GetValueOrDefault("en", dto.NameAz);
 
-        role.Permissions = dto.Permissions ?? new List<int>();
+        role.Permissions = dto.Permissions?.ToArray() ?? Array.Empty<int>();
         role.LastModifiedAt = DateTime.UtcNow;
         role.LastModifiedBy = "System";
 

@@ -11,8 +11,8 @@ public class RoleConfiguration : IEntityTypeConfiguration<Role>
         builder.HasKey(r => r.Id);
         builder.Property(r => r.NameAz).IsRequired().HasMaxLength(100);
 
-        // PostgreSQL massiv tipini EF Core-a tanıdırıq
-        builder.Property(r => r.Permissions)
-            .HasColumnType("integer[]");
+        // EF Core 8: int[] is handled as a primitive collection.
+        // Npgsql will use 'integer[]', SQLite will use JSON.
+        builder.Property(r => r.Permissions);
     }
 }

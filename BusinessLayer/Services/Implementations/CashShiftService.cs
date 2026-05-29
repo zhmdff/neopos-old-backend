@@ -58,7 +58,7 @@ public class CashShiftService : ICashShiftService
 
         if (user == null) throw new Exception("İstifadəçi tapılmadı!");
 
-        var permissions = user.Role?.Permissions ?? new List<int>();
+        var permissions = user.Role?.Permissions ?? Array.Empty<int>();
 
         bool hasPermission = user.Role!.IsAdmin || permissions.Any(p => p == 20);
 

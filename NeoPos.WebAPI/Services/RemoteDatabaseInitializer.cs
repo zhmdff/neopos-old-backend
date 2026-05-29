@@ -19,10 +19,24 @@ public static class RemoteDatabaseInitializer
         {
             logger.LogInformation("Checking remote PostgreSQL database initialization...");
             
-            // Use MigrateAsync to ensure history table and migrations are applied
-            await remoteDb.Database.MigrateAsync();
-            
-            logger.LogInformation("Remote PostgreSQL database is ready.");
+            // Fix: Add retry logic for Docker startup race conditions
+            int retries = 5;
+            while (retries > 0)
+            {
+                try
+                {
+                    // Use MigrateAsync to ensure history table and migrations are applied
+                    await remoteDb.Database.MigrateAsync();
+                    logger.LogInformation("Remote PostgreSQL database is ready.");
+                    break;
+                }
+                catch (Npgsql.NpgsqlException) when (retries > 1)
+                {
+                    logger.LogWarning("Remote database is not ready yet. Retrying in 3 seconds... ({Retries} left)", retries - 1);
+                    await Task.Delay(3000);
+                    retries--;
+                }
+            }
         }
         catch (Exception ex)
         {

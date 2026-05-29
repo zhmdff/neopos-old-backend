@@ -35,10 +35,17 @@ public class AuthService : IAuthService
             .Where(u => u.Username == username && u.IsActive && !u.IsDeleted)
             .ToListAsync();
 
-        var primary = users.FirstOrDefault(u => BCrypt.Net.BCrypt.Verify(password, u.PasswordHash));
+        var matches = users.Where(u => BCrypt.Net.BCrypt.Verify(password, u.PasswordHash)).ToList();
+        var primary = matches.FirstOrDefault();
 
         if (primary == null)
             throw new Exception("İstifadəçi adı və ya şifrə yanlışdır.");
+
+        // Default şirkət: admin olanı üstün tut (yoxdursa birinci)
+        primary = matches
+            .OrderByDescending(u => u.Role != null && u.Role.IsAdmin)
+            .ThenBy(u => u.Company?.NameAz)
+            .First();
 
         if (primary.Company != null && CompanyPackageExpiry.IsExpired(primary.Company.PackageEndDate))
             throw new Exception(CompanyPackageExpiry.ExpiredMessageAz);

@@ -1,4 +1,4 @@
-﻿using Domain.Common.Entities;
+using Domain.Common.Entities;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 using Microsoft.EntityFrameworkCore;
 using System.Text.Json;
@@ -21,15 +21,11 @@ public class QRMenuSettingConfiguration : IEntityTypeConfiguration<QRMenuSetting
             .HasDefaultValue(0);
 
         // 3. QALEREYA ŞƏKİLLƏRİ (JSON)
-        builder.Property(x => x.GalleryImages)
-            .HasConversion(
-                v => JsonSerializer.Serialize(v, (JsonSerializerOptions)null),
-                v => JsonSerializer.Deserialize<List<string>>(v, (JsonSerializerOptions)null) ?? new List<string>()
-            )
-            .Metadata.SetValueComparer(new Microsoft.EntityFrameworkCore.ChangeTracking.ValueComparer<List<string>>(
-                (c1, c2) => c1.SequenceEqual(c2),
-                c => c.Aggregate(0, (a, v) => HashCode.Combine(a, v.GetHashCode())),
-                c => c.ToList()));
+        builder.Ignore(x => x.GalleryImages);
+
+        builder.Property(x => x.GalleryImagesJson)
+            .HasColumnName("GalleryImages")
+            .HasDefaultValue("[]");
 
         // 4. UZUNLUQ MƏHDUDİYYƏTLƏRİ
         builder.Property(x => x.WifiName).HasMaxLength(100);

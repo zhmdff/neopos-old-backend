@@ -71,7 +71,7 @@ public sealed class AutoCashShiftHostedService : BackgroundService
     private static bool InWindow(int nowMinutes, int targetMinutes)
         => nowMinutes >= targetMinutes && nowMinutes < targetMinutes + WindowMinutes;
 
-    private static Guid? PickActorUserId(List<(Guid UserId, bool IsAdmin, List<int> Permissions)> candidates)
+    private static Guid? PickActorUserId(List<(Guid UserId, bool IsAdmin, IEnumerable<int> Permissions)> candidates)
     {
         var admin = candidates.FirstOrDefault(x => x.IsAdmin).UserId;
         if (admin != Guid.Empty) return admin;
@@ -132,11 +132,11 @@ public sealed class AutoCashShiftHostedService : BackgroundService
                 {
                     u.Id,
                     IsAdmin = u.Role != null && u.Role.IsAdmin,
-                    Perms = u.Role != null ? (u.Role.Permissions ?? new List<int>()) : new List<int>()
+                    Perms = u.Role != null ? (u.Role.Permissions ?? Array.Empty<int>()) : Array.Empty<int>()
                 })
                 .ToListAsync(ct);
 
-            var actor = PickActorUserId(users.Select(x => (x.Id, x.IsAdmin, x.Perms ?? new List<int>())).ToList());
+            var actor = PickActorUserId(users.Select(x => (x.Id, x.IsAdmin, (IEnumerable<int>)x.Perms)).ToList());
             if (actor == null)
             {
                 _logger.LogWarning("[auto-shift] no actor user (company={CompanyId} {CompanyName})", c.Id, c.NameAz);

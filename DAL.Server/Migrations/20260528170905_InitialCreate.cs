@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
@@ -337,7 +337,7 @@ namespace DAL.Server.Migrations
                     NameRu = table.Column<string>(type: "TEXT", nullable: false),
                     NameEn = table.Column<string>(type: "TEXT", nullable: false),
                     IsAdmin = table.Column<bool>(type: "INTEGER", nullable: false),
-                    Permissions = table.Column<string>(type: "integer[]", nullable: true),
+                    Permissions = table.Column<string>(type: "TEXT", nullable: true),
                     IsDeleted = table.Column<bool>(type: "INTEGER", nullable: false),
                     IsSynced = table.Column<bool>(type: "INTEGER", nullable: false),
                     CreatedAt = table.Column<DateTime>(type: "TEXT", nullable: false),

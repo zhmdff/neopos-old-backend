@@ -43,6 +43,8 @@ public class TenantBootstrapService
 
         _logger.LogInformation("Starting initial bootstrap for tenant {TenantKey}...", tenantKey);
 
+        bool usePostgresAsPrimary = _configuration["NeoPos:UsePostgresAsPrimary"]?.ToLower() == "true";
+
         try
         {
             // Fix B7: Graceful check for remote connectivity
@@ -127,7 +129,7 @@ public class TenantBootstrapService
                     NameEn = "Admin",
                     NameRu = "Admin",
                     IsAdmin = true,
-                    Permissions = new List<int>(), // Use empty list instead of null
+                    Permissions = Array.Empty<int>(), // Use empty array instead of null
                     CreatedAt = now,
                     CreatedBy = "System_Seed",
                     IsDeleted = false,
@@ -153,11 +155,23 @@ public class TenantBootstrapService
                 await remoteDb.Roles.AddAsync(role);
                 await remoteDb.Users.AddAsync(user);
                 
-                // Seed fake/demo data for local testing
-                await SeedDemoDataAsync(remoteDb, company.Id);
+                // Seed fake/demo data only if enabled in config
+                bool seedDemoData = _configuration["NeoPos:SeedDemoData"]?.ToLower() == "true";
+                if (seedDemoData)
+                {
+                    _logger.LogInformation("Seeding demo data for company {CompanyName}...", company.NameAz);
+                    await SeedDemoDataAsync(remoteDb, company.Id);
+                }
 
                 await remoteDb.SaveChangesAsync();
                 _logger.LogInformation("Master Seeding Done. User: {Username}, Pass: {Password}", adminUsername, adminPassword);
+            }
+
+            // If we are using Postgres as primary, we don't need to wipe/hydrate "local" (which is the same DB)
+            if (usePostgresAsPrimary)
+            {
+                _logger.LogInformation("Running in Master mode (PostgreSQL primary). Skipping local hydration.");
+                return;
             }
 
             // Open local connection and disable foreign key checks during bulk sync
@@ -324,7 +338,7 @@ public class TenantBootstrapService
             NameRu = "Кухня",
             IsPrinting = true,
             PrinterType = "Network",
-            PrinterValue = "192.168.1.200",
+            PrinterValue = "192.168.100.97",
             CreatedAt = now,
             CreatedBy = "System_Seed",
             IsDeleted = false

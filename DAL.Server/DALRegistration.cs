@@ -9,10 +9,19 @@ public static class DALRegistration
 {
     public static void RegisterDAL(this IServiceCollection service, IConfiguration configuration)
     {
-        // Local database (SQLite) for primary operations
+        bool usePostgres = configuration["NeoPos:UsePostgresAsPrimary"]?.ToLower() == "true";
+
+        // Local database for primary operations
         service.AddDbContext<AppDbContext>(opt =>
         {
-            opt.UseSqlite(configuration.GetConnectionString("Sqlite"));
+            if (usePostgres)
+            {
+                opt.UseNpgsql(configuration.GetConnectionString("RemotePostgres"));
+            }
+            else
+            {
+                opt.UseSqlite(configuration.GetConnectionString("Sqlite"));
+            }
         });
 
         // Remote database (PostgreSQL) for synchronization

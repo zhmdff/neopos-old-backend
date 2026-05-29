@@ -1,4 +1,8 @@
-﻿namespace Domain.Common.Entities;
+using System.Collections.Generic;
+using System.ComponentModel.DataAnnotations.Schema;
+using System.Text.Json;
+
+namespace Domain.Common.Entities;
 
 public class QRMenuSetting : AuditableCompanyEntity
 {
@@ -18,5 +22,14 @@ public class QRMenuSetting : AuditableCompanyEntity
 
     public decimal ServiceChargePercent { get; set; } = 0;
 
-    public List<string> GalleryImages { get; set; } = new();
+    [NotMapped]
+    public List<string> GalleryImages
+    {
+        get => string.IsNullOrEmpty(GalleryImagesJson) 
+            ? new() 
+            : JsonSerializer.Deserialize<List<string>>(GalleryImagesJson, (JsonSerializerOptions?)null) ?? new();
+        set => GalleryImagesJson = JsonSerializer.Serialize(value, (JsonSerializerOptions?)null);
+    }
+
+    public string GalleryImagesJson { get; set; } = "[]";
 }

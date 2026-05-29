@@ -41,7 +41,7 @@ public class ShiftExpenseService : IShiftExpenseService
         if (user?.Role == null)
             throw new Exception("İstifadəçi tapılmadı.");
 
-        var permissions = user.Role.Permissions ?? new List<int>();
+        var permissions = user.Role.Permissions ?? Array.Empty<int>();
         if (!user.Role.IsAdmin && !permissions.Any(p => p == 20))
             throw new Exception("Bu əməliyyat üçün kassa növbəsi icazəsi (20) və ya admin lazımdır.");
     }
@@ -55,7 +55,7 @@ public class ShiftExpenseService : IShiftExpenseService
         if (user?.Role == null)
             throw new Exception("İstifadəçi tapılmadı.");
 
-        var permissions = user.Role.Permissions ?? new List<int>();
+        var permissions = user.Role.Permissions ?? Array.Empty<int>();
         if (!user.Role.IsAdmin && !permissions.Any(p => p == 23))
             throw new Exception("Bu əməliyyat üçün «Arxivi görə bilər» icazəsi (23) və ya admin lazımdır.");
     }
