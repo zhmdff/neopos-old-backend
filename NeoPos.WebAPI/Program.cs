@@ -41,7 +41,10 @@ try
     builder.Services.AddHostedService<NeoPos.WebAPI.Services.BossTelegramLineDeleteCallbackHostedService>();
 
     // Register DatabaseSyncService as a singleton and a hosted service (only for tenants/SQLite)
-    bool usePostgresAsPrimary = builder.Configuration["NeoPos:UsePostgresAsPrimary"]?.ToLower() == "true";
+    string mode = Environment.GetEnvironmentVariable("NEOPOS_MODE") 
+                  ?? builder.Configuration["NeoPos:Mode"] 
+                  ?? "tenant"; // Default is tenant
+    bool usePostgresAsPrimary = mode.Equals("master", StringComparison.OrdinalIgnoreCase);
     if (!usePostgresAsPrimary)
     {
         builder.Services.AddSingleton<NeoPos.WebAPI.Services.DatabaseSyncService>();

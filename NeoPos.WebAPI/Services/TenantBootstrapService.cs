@@ -43,7 +43,10 @@ public class TenantBootstrapService
 
         _logger.LogInformation("Starting initial bootstrap for tenant {TenantKey}...", tenantKey);
 
-        bool usePostgresAsPrimary = _configuration["NeoPos:UsePostgresAsPrimary"]?.ToLower() == "true";
+        string mode = Environment.GetEnvironmentVariable("NEOPOS_MODE") 
+                      ?? _configuration["NeoPos:Mode"] 
+                      ?? "tenant"; // Default is tenant
+        bool usePostgresAsPrimary = mode.Equals("master", StringComparison.OrdinalIgnoreCase);
 
         try
         {
