@@ -8,11 +8,13 @@ out/
 # Dependencies
 node_modules/
 
-# Local data and secrets
-*.db
-*.db-shm
-*.db-wal
-data/
+# Local data and secrets (Root only)
+/*.db
+/*.db-shm
+/*.db-wal
+/data/
+
+# Secrets
 .env
 .env.*
 !.env.example
