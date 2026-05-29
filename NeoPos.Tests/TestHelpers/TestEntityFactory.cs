@@ -66,11 +66,11 @@ public static class TestEntityFactory
         IsSynced = isSynced,
     };
 
-    public static LocalSyncMetadata CreateSyncMetadata(string tenantKey) => new()
+    public static LocalSyncMetadata CreateSyncMetadata(string tenantKey, DateTime? lastSync = null) => new()
     {
         Id = Guid.NewGuid(),
         TenantKey = tenantKey,
-        LastSuccessfulSyncAt = DateTime.UtcNow.AddHours(-1),
+        LastSuccessfulSyncAt = lastSync ?? DateTime.UtcNow.AddHours(-1),
         LastSyncStatus = "Test",
         IsSynced = false,
     };

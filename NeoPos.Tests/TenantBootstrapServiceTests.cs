@@ -41,7 +41,7 @@ public class TenantBootstrapServiceTests
 
         var meta = await db.LocalDb.LocalSyncMetadata.FirstAsync();
         Assert.Equal("bootstrap-tenant", meta.TenantKey);
-        Assert.NotNull(meta.LastSuccessfulSyncAt);
+        Assert.Null(meta.LastSuccessfulSyncAt);
     }
 
     [Fact]

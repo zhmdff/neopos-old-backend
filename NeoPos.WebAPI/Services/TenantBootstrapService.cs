@@ -268,7 +268,8 @@ public class TenantBootstrapService
                 localDb.LocalSyncMetadata.Add(metadata);
             }
             metadata.TenantKey = tenantKey;
-            metadata.LastSuccessfulSyncAt = now;
+            // Leave null until first successful sync so DatabaseSyncService pulls full master catalog.
+            metadata.LastSuccessfulSyncAt = null;
             metadata.LastSyncStatus = anythingChanged ? "LocalBootstrapUpdated" : "LocalBootstrapOk";
             metadata.IsSynced = false;
             await localDb.SaveChangesAsync();

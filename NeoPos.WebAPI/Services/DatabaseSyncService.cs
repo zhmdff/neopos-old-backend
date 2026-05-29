@@ -85,7 +85,7 @@ public class DatabaseSyncService : BackgroundService
         }
 
         var metadata = await localDb.LocalSyncMetadata.FirstOrDefaultAsync(stoppingToken);
-        if (metadata == null || !metadata.LastSuccessfulSyncAt.HasValue)
+        if (metadata == null)
         {
             _logger.LogWarning("System not bootstrapped. Skipping background sync.");
             return;
@@ -98,8 +98,12 @@ public class DatabaseSyncService : BackgroundService
             return;
         }
 
-        var lastSync = metadata.LastSuccessfulSyncAt.Value;
+        var lastSync = metadata.LastSuccessfulSyncAt ?? DateTime.MinValue;
         var syncStartTime = DateTime.UtcNow;
+        if (!metadata.LastSuccessfulSyncAt.HasValue)
+        {
+            _logger.LogInformation("First sync cycle — pulling all master data modified since epoch.");
+        }
 
         // Master company row (e.g. from create_tenant.py) may use a different Id than local bootstrap.
         var masterCompany = await remoteDb.Companies
@@ -347,7 +351,27 @@ public class DatabaseSyncService : BackgroundService
                     foreach (var remoteItem in filteredRemoteData)
                     {
                         var localItem = localItemsToUpdate.FirstOrDefault(x => x.Id == remoteItem.Id);
-                        remoteItem.IsSynced = true; 
+                        remoteItem.IsSynced = true;
+
+                        if (type == typeof(Company))
+                        {
+                            var remoteCompany = (Company)(object)remoteItem;
+                            var localCompany = await localDb.Companies
+                                .FirstOrDefaultAsync(c => c.TenantKey == remoteCompany.TenantKey, stoppingToken);
+                            if (localCompany != null)
+                            {
+                                MergeRemoteCompanyIntoLocal(localCompany, remoteCompany);
+                                localCompany.IsSynced = true;
+                                continue;
+                            }
+                        }
+
+                        if (remoteItem is AuditableCompanyEntity pulledCompanyEntity
+                            && pulledCompanyEntity.CompanyId == remoteCompanyId
+                            && remoteCompanyId != localCompanyId)
+                        {
+                            pulledCompanyEntity.CompanyId = localCompanyId;
+                        }
 
                         if (localItem == null)
                         {
@@ -362,6 +386,48 @@ public class DatabaseSyncService : BackgroundService
                 }
             }
         }
+    }
+
+    private static void MergeRemoteCompanyIntoLocal(Company local, Company remote)
+    {
+        local.Logo = remote.Logo;
+        local.NameAz = remote.NameAz;
+        local.NameRu = remote.NameRu;
+        local.NameEn = remote.NameEn;
+        local.AddressAz = remote.AddressAz;
+        local.AddressRu = remote.AddressRu;
+        local.AddressEn = remote.AddressEn;
+        local.PhoneNumber1 = remote.PhoneNumber1;
+        local.PhoneNumber2 = remote.PhoneNumber2;
+        local.PhoneNumber3 = remote.PhoneNumber3;
+        local.Slug = remote.Slug;
+        local.PackageEndDate = remote.PackageEndDate;
+        local.IsActive = remote.IsActive;
+        local.IsDeliveryPriceEnabled = remote.IsDeliveryPriceEnabled;
+        local.IsUserModeActive = remote.IsUserModeActive;
+        local.IsGuestModeActive = remote.IsGuestModeActive;
+        local.TablesLayoutMode = remote.TablesLayoutMode;
+        local.EkassamEnabled = remote.EkassamEnabled;
+        local.EkassamBaseUrl = remote.EkassamBaseUrl;
+        local.EkassamApiKey = remote.EkassamApiKey;
+        local.AutoCashShiftEnabled = remote.AutoCashShiftEnabled;
+        local.AutoCashShiftOpenTime = remote.AutoCashShiftOpenTime;
+        local.AutoCashShiftCloseTime = remote.AutoCashShiftCloseTime;
+        local.AutoCashShiftForceClose = remote.AutoCashShiftForceClose;
+        local.CashShiftPromptOpeningDeposit = remote.CashShiftPromptOpeningDeposit;
+        local.CashShiftPrintReportOnClose = remote.CashShiftPrintReportOnClose;
+        local.CashierPrinterTarget = remote.CashierPrinterTarget;
+        local.KitchenPrinterTarget = remote.KitchenPrinterTarget;
+        local.ReceiptDesignSettingsJson = remote.ReceiptDesignSettingsJson;
+        local.KassaReceiptThankYouText = remote.KassaReceiptThankYouText;
+        local.PosLockScreenImage = remote.PosLockScreenImage;
+        local.CustomerDisplayLockScreenImage = remote.CustomerDisplayLockScreenImage;
+        local.MenuFilterByWorkshop = remote.MenuFilterByWorkshop;
+        local.TerminalLineDeleteConfirmEnabled = remote.TerminalLineDeleteConfirmEnabled;
+        local.TelegramBotToken = remote.TelegramBotToken;
+        local.TelegramNotifyPrefsJson = remote.TelegramNotifyPrefsJson;
+        local.LastModifiedAt = remote.LastModifiedAt;
+        local.IsDeleted = remote.IsDeleted;
     }
 
     private string ResolveMasterWebBaseUrl()

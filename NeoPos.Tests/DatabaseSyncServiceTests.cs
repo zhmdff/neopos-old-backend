@@ -140,6 +140,74 @@ public class DatabaseSyncServiceTests
     }
 
     [Fact]
+    public async Task TriggerSync_PullsBossProduct_WithRemappedLocalCompanyId()
+    {
+        await using var factory = await SyncTestDbFactory.CreateAsync();
+        var localCompanyId = Guid.NewGuid();
+        var masterCompanyId = Guid.NewGuid();
+        const string tenantKey = "product-pull-id-mismatch";
+
+        factory.LocalDb.Companies.Add(TestEntityFactory.CreateCompany(localCompanyId, tenantKey));
+        factory.RemoteDb.Companies.Add(TestEntityFactory.CreateCompany(masterCompanyId, tenantKey));
+        factory.LocalDb.LocalSyncMetadata.Add(TestEntityFactory.CreateSyncMetadata(tenantKey, lastSync: null));
+
+        var workshopId = Guid.NewGuid();
+        var categoryId = Guid.NewGuid();
+        var productId = Guid.NewGuid();
+
+        factory.RemoteDb.Workshops.Add(new Workshop
+        {
+            Id = workshopId,
+            CompanyId = masterCompanyId,
+            NameAz = "W",
+            NameEn = "W",
+            NameRu = "W",
+            PrinterType = "Net",
+            PrinterValue = "x",
+            CreatedAt = DateTime.UtcNow,
+            CreatedBy = "Test",
+            IsSynced = true,
+        });
+        factory.RemoteDb.Categories.Add(new Category
+        {
+            Id = categoryId,
+            CompanyId = masterCompanyId,
+            NameAz = "Cat",
+            NameEn = "Cat",
+            NameRu = "Cat",
+            CreatedAt = DateTime.UtcNow,
+            CreatedBy = "Test",
+            IsSynced = true,
+        });
+        factory.RemoteDb.Products.Add(new Product
+        {
+            Id = productId,
+            CompanyId = masterCompanyId,
+            CategoryId = categoryId,
+            WorkshopId = workshopId,
+            NameAz = "Master Pizza",
+            NameEn = "Master Pizza",
+            NameRu = "Master Pizza",
+            SalePrice = 15m,
+            CreatedAt = DateTime.UtcNow,
+            CreatedBy = "Boss",
+            LastModifiedAt = DateTime.UtcNow,
+            IsSynced = true,
+        });
+
+        await factory.LocalDb.SaveChangesAsync();
+        await factory.RemoteDb.SaveChangesAsync();
+
+        await factory.CreateSyncService().TriggerSyncAsync();
+
+        var localProduct = await factory.LocalDb.Products.AsNoTracking()
+            .FirstOrDefaultAsync(p => p.Id == productId);
+        Assert.NotNull(localProduct);
+        Assert.Equal(localCompanyId, localProduct!.CompanyId);
+        Assert.Equal("Master Pizza", localProduct.NameAz);
+    }
+
+    [Fact]
     public async Task TriggerSync_WithoutBootstrapMetadata_DoesNotThrow()
     {
         await using var factory = await SyncTestDbFactory.CreateAsync();
