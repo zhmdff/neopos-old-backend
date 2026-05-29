@@ -71,6 +71,7 @@ public class TenantBootstrapService
             }
 
             // 1. Resolve Company from Master
+            _logger.LogInformation("Looking for company with TenantKey: {TenantKey}", tenantKey);
             var company = await remoteDb.Companies
                 .FirstOrDefaultAsync(x => x.TenantKey == tenantKey);
 
@@ -92,19 +93,21 @@ public class TenantBootstrapService
                     PackageEndDate = DateTime.UtcNow.AddYears(5),
                     IsActive = true,
                     CreatedAt = DateTime.UtcNow,
-                    CreatedBy = "System_Seed"
+                    CreatedBy = "System_Seed",
+                    IsSynced = true
                 };
                 await remoteDb.Companies.AddAsync(company);
                 await remoteDb.SaveChangesAsync();
+                _logger.LogInformation("New company created on Master: {CompanyId}", company.Id);
             }
 
-            _logger.LogInformation("Found company {CompanyName} (ID: {CompanyId}) on Master.", company.NameAz, company.Id);
+            _logger.LogInformation("Target company: {CompanyName} (ID: {CompanyId})", company.NameAz, company.Id);
 
             // Check if there is any user for this company in remoteDb
             var hasAnyUser = await remoteDb.Users.AnyAsync(u => u.CompanyId == company.Id && !u.IsDeleted);
             if (!hasAnyUser)
             {
-                _logger.LogInformation("No users found for company {CompanyName} on Master. Seeding a default admin user...", company.NameAz);
+                _logger.LogInformation("No users found for company {CompanyName} on Master. Seeding admin...", company.NameAz);
                 
                 var adminUsername = _configuration["NeoPos:AdminUsername"]?.Trim();
                 if (string.IsNullOrEmpty(adminUsername)) adminUsername = "admin_boss";
@@ -124,10 +127,11 @@ public class TenantBootstrapService
                     NameEn = "Admin",
                     NameRu = "Admin",
                     IsAdmin = true,
-                    Permissions = [],
+                    Permissions = new List<int>(), // Use empty list instead of null
                     CreatedAt = now,
                     CreatedBy = "System_Seed",
-                    IsDeleted = false
+                    IsDeleted = false,
+                    IsSynced = true
                 };
 
                 var user = new User
@@ -142,7 +146,8 @@ public class TenantBootstrapService
                     IsActive = true,
                     CreatedAt = now,
                     CreatedBy = "System_Seed",
-                    IsDeleted = false
+                    IsDeleted = false,
+                    IsSynced = true
                 };
 
                 await remoteDb.Roles.AddAsync(role);
@@ -152,7 +157,7 @@ public class TenantBootstrapService
                 await SeedDemoDataAsync(remoteDb, company.Id);
 
                 await remoteDb.SaveChangesAsync();
-                _logger.LogInformation("Admin role, user, and demo data seeded successfully on Master. Username: {Username}, Password: {Password}", adminUsername, adminPassword);
+                _logger.LogInformation("Master Seeding Done. User: {Username}, Pass: {Password}", adminUsername, adminPassword);
             }
 
             // Open local connection and disable foreign key checks during bulk sync
