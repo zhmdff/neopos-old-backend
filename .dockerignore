@@ -2,17 +2,13 @@
 bin/
 obj/
 publish/
-dist/
-out/
 
 # Dependencies
 node_modules/
 
-# Local data and secrets (Root only)
-/*.db
-/*.db-shm
-/*.db-wal
-/data/
+# Local data and secrets
+neopos_local.db*
+/data/neopos_local.db*
 
 # Secrets
 .env
