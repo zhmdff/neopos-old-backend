@@ -11,19 +11,17 @@ public class DatabaseSyncService : BackgroundService
     private readonly IServiceProvider _serviceProvider;
     private readonly IConfiguration _configuration;
     private readonly ILogger<DatabaseSyncService> _logger;
-    private readonly IMediaSyncService _mediaSync;
 
     private int _failCount = 0;
     private const int MaxBackoffMinutes = 60;
 
     public static bool IsOutageSimulated { get; set; } = false;
 
-    public DatabaseSyncService(IServiceProvider serviceProvider, IConfiguration configuration, ILogger<DatabaseSyncService> logger, IMediaSyncService mediaSync)
+    public DatabaseSyncService(IServiceProvider serviceProvider, IConfiguration configuration, ILogger<DatabaseSyncService> logger)
     {
         _serviceProvider = serviceProvider;
         _configuration = configuration;
         _logger = logger;
-        _mediaSync = mediaSync;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -33,7 +31,6 @@ public class DatabaseSyncService : BackgroundService
 
         _logger.LogInformation("Database Sync Service is starting with {InitialDelay}s initial delay.", initialDelaySeconds);
 
-        // Fix B2: Initial startup delay
         await Task.Delay(TimeSpan.FromSeconds(initialDelaySeconds), stoppingToken);
 
         while (!stoppingToken.IsCancellationRequested)
@@ -47,7 +44,7 @@ public class DatabaseSyncService : BackgroundService
                 try
                 {
                     await SyncDataAsync(stoppingToken);
-                    _failCount = 0; // Reset on success
+                    _failCount = 0; 
                 }
                 catch (Exception ex)
                 {
@@ -56,11 +53,9 @@ public class DatabaseSyncService : BackgroundService
                 }
             }
 
-            // Fix B2 & B3: Configurable interval + exponential backoff
             var nextDelayMinutes = intervalMinutes;
             if (_failCount > 0)
             {
-                // Exponential backoff: 5, 10, 20, 40, 60...
                 nextDelayMinutes = (int)Math.Min(intervalMinutes * Math.Pow(2, _failCount - 1), MaxBackoffMinutes);
                 _logger.LogInformation("Next sync attempt in {Minutes} minutes due to backoff.", nextDelayMinutes);
             }
@@ -80,8 +75,8 @@ public class DatabaseSyncService : BackgroundService
         using var scope = _serviceProvider.CreateScope();
         var localDb = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         var remoteDb = scope.ServiceProvider.GetRequiredService<RemoteDbContext>();
+        var mediaSync = scope.ServiceProvider.GetRequiredService<IMediaSyncService>();
 
-        // Get Metadata and CompanyId
         var metadata = await localDb.LocalSyncMetadata.FirstOrDefaultAsync(stoppingToken);
         if (metadata == null || !metadata.LastSuccessfulSyncAt.HasValue)
         {
@@ -101,7 +96,6 @@ public class DatabaseSyncService : BackgroundService
 
         _logger.LogInformation("Starting bi-directional sync cycle. Last sync: {LastSync}", lastSync);
 
-        // Define a safe sync order to avoid Foreign Key violations (Parents before Children)
         var syncOrder = new List<Type>
         {
             typeof(Company),
@@ -138,7 +132,6 @@ public class DatabaseSyncService : BackgroundService
             typeof(HallTimeDiscountRule)
         };
 
-        // Get all DbSet properties from AppDbContext
         var allDbSetTypes = typeof(AppDbContext)
             .GetProperties()
             .Where(p => p.PropertyType.IsGenericType && 
@@ -146,17 +139,14 @@ public class DatabaseSyncService : BackgroundService
             .Select(p => p.PropertyType.GetGenericArguments()[0])
             .ToList();
 
-        // Combine defined order with any remaining entities
         var finalOrder = syncOrder.Where(t => allDbSetTypes.Contains(t)).ToList();
         finalOrder.AddRange(allDbSetTypes.Except(finalOrder));
 
         foreach (var entityType in finalOrder)
         {
-            // Skip non-syncable entities
             if (entityType == typeof(LocalSyncMetadata))
                 continue;
 
-            // Sync entities inheriting from BaseEntity
             if (typeof(BaseEntity).IsAssignableFrom(entityType))
             {
                 await InvokeSyncTableAsync(localDb, remoteDb, entityType, company.Id, lastSync, stoppingToken);
@@ -186,14 +176,13 @@ public class DatabaseSyncService : BackgroundService
             imagePaths.AddRange(await localDb.Categories.AsNoTracking().Select(x => x.ImageUrl).ToListAsync(stoppingToken));
             imagePaths.AddRange(await localDb.Products.AsNoTracking().Select(x => x.ImageUrl).ToListAsync(stoppingToken));
 
-            await _mediaSync.SyncMissingMediaAsync(masterWebBase, imagePaths, stoppingToken);
+            await mediaSync.SyncMissingMediaAsync(masterWebBase, imagePaths, stoppingToken);
         }
         catch (Exception ex)
         {
             _logger.LogWarning("Media sync failed but data sync continued: {Msg}", ex.Message);
         }
 
-        // Update Metadata
         metadata.LastSuccessfulSyncAt = syncStartTime;
         metadata.LastSyncStatus = "Success";
         await localDb.SaveChangesAsync(stoppingToken);
@@ -217,7 +206,6 @@ public class DatabaseSyncService : BackgroundService
     {
         var type = typeof(T);
 
-        // AUTHORITY MATRIX: Define which tables are managed where
         var bossManagedConfig = new HashSet<Type> { 
             typeof(Company), typeof(Role), typeof(User), typeof(Hall), typeof(Table), 
             typeof(Workshop), typeof(Category), typeof(Product), typeof(ProductWorkshop), 
@@ -235,8 +223,6 @@ public class DatabaseSyncService : BackgroundService
             typeof(PendingOrderLineDeleteConfirm)
         };
 
-        // PHASE 1: Push (Local -> Master) 
-        // Restricted: Don't push Boss-managed config (unless it's a new Customer or specifically allowed)
         if (!bossManagedConfig.Contains(type) || type == typeof(Customer))
         {
             var localItems = await localDb.Set<T>()
@@ -288,8 +274,6 @@ public class DatabaseSyncService : BackgroundService
             }
         }
 
-        // PHASE 2: Pull (Master -> Local)
-        // Restricted: Don't pull Staff-managed transactions (Boss only views them, doesn't edit them)
         if (!staffManagedTransactions.Contains(type) || type == typeof(Customer))
         {
             if (typeof(AuditableEntity).IsAssignableFrom(type))

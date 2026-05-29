@@ -141,7 +141,7 @@ public class TenantBootstrapService
                     RoleId = roleId,
                     FullName = "System Admin",
                     Username = adminUsername,
-                    PasswordHash = adminPassword,
+                    PasswordHash = BCrypt.Net.BCrypt.HashPassword(adminPassword), // Hashed
                     PinCode = "1111",
                     IsActive = true,
                     CreatedAt = now,

@@ -35,19 +35,10 @@ public class AuthService : IAuthService
             .Where(u => u.Username == username && u.IsActive && !u.IsDeleted)
             .ToListAsync();
 
-        var matches = users
-            // Android/WebView klaviatura/autofill bəzən boşluq əlavə edir; server tərəfdə də trim edirik.
-            .Where(u => u.PasswordHash == password)
-            .ToList();
+        var primary = users.FirstOrDefault(u => BCrypt.Net.BCrypt.Verify(password, u.PasswordHash));
 
-        if (matches.Count == 0)
+        if (primary == null)
             throw new Exception("İstifadəçi adı və ya şifrə yanlışdır.");
-
-        // Default şirkət: admin olanı üstün tut (yoxdursa birinci)
-        var primary = matches
-            .OrderByDescending(u => u.Role != null && u.Role.IsAdmin)
-            .ThenBy(u => u.Company?.NameAz)
-            .First();
 
         if (primary.Company != null && CompanyPackageExpiry.IsExpired(primary.Company.PackageEndDate))
             throw new Exception(CompanyPackageExpiry.ExpiredMessageAz);
