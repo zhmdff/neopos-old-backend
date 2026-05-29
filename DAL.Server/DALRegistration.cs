@@ -16,36 +16,31 @@ public static class DALRegistration
 
         bool usePostgres = mode.Equals("master", StringComparison.OrdinalIgnoreCase);
 
-        string? remotePostgres = configuration.GetConnectionString("RemotePostgres");
-        if (string.IsNullOrEmpty(remotePostgres) || remotePostgres.Contains("localhost") || remotePostgres.Contains("127.0.0.1"))
+        string? remotePostgres = null;
+        if (usePostgres)
         {
-            if (usePostgres)
-            {
+            remotePostgres = configuration.GetConnectionString("RemotePostgres");
+            if (string.IsNullOrEmpty(remotePostgres) || remotePostgres.Contains("localhost") || remotePostgres.Contains("127.0.0.1"))
                 remotePostgres = "Host=localhost;Port=5432;Database=neopos_new_db;Username=postgres;Password=Slome2006";
-            }
-            else
-            {
-                remotePostgres = "Host=37.60.247.244;Port=5432;Database=neopos_new_db;Username=postgres;Password=Slome2006";
-            }
         }
 
-        // Local database for primary operations
+        // Primary database: master uses PostgreSQL, tenant uses SQLite
         service.AddDbContext<AppDbContext>(opt =>
         {
             if (usePostgres)
-            {
                 opt.UseNpgsql(remotePostgres);
-            }
             else
-            {
                 opt.UseSqlite(configuration.GetConnectionString("Sqlite"));
-            }
         });
 
-        // Remote database (PostgreSQL) for synchronization
-        service.AddDbContext<RemoteDbContext>(opt =>
+        // Remote PostgreSQL context: ONLY registered for master mode.
+        // Tenants have zero PostgreSQL access — they sync via the master HTTP API.
+        if (usePostgres)
         {
-            opt.UseNpgsql(remotePostgres);
-        });
+            service.AddDbContext<RemoteDbContext>(opt =>
+            {
+                opt.UseNpgsql(remotePostgres);
+            });
+        }
     }
 }

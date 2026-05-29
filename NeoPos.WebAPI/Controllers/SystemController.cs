@@ -9,12 +9,13 @@ namespace NeoPos.WebAPI.Controllers;
 public class SystemController : ControllerBase
 {
     private readonly DAL.Server.Context.AppDbContext _localDb;
-    private readonly DAL.Server.Context.RemoteDbContext _remoteDb;
+    private readonly DAL.Server.Context.RemoteDbContext? _remoteDb;
 
-    public SystemController(DAL.Server.Context.AppDbContext localDb, DAL.Server.Context.RemoteDbContext remoteDb)
+    public SystemController(DAL.Server.Context.AppDbContext localDb, IServiceProvider serviceProvider)
     {
         _localDb = localDb;
-        _remoteDb = remoteDb;
+        // RemoteDbContext is only registered in master mode; tenants don't have it.
+        _remoteDb = serviceProvider.GetService<DAL.Server.Context.RemoteDbContext>();
     }
 
     /// <summary>
@@ -85,7 +86,8 @@ public class SystemController : ControllerBase
         bool isRemoteReachable = false;
         try
         {
-            isRemoteReachable = await _remoteDb.Database.CanConnectAsync();
+            if (_remoteDb != null)
+                isRemoteReachable = await _remoteDb.Database.CanConnectAsync();
         }
         catch { }
 

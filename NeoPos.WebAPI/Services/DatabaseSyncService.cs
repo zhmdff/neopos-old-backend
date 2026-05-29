@@ -74,8 +74,14 @@ public class DatabaseSyncService : BackgroundService
     {
         using var scope = _serviceProvider.CreateScope();
         var localDb = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        var remoteDb = scope.ServiceProvider.GetRequiredService<RemoteDbContext>();
+        var remoteDb = scope.ServiceProvider.GetService<RemoteDbContext>();
         var mediaSync = scope.ServiceProvider.GetRequiredService<IMediaSyncService>();
+
+        if (remoteDb == null)
+        {
+            _logger.LogWarning("RemoteDbContext is not registered (tenant mode). Skipping DB-level sync — data is managed via master HTTP API.");
+            return;
+        }
 
         var metadata = await localDb.LocalSyncMetadata.FirstOrDefaultAsync(stoppingToken);
         if (metadata == null || !metadata.LastSuccessfulSyncAt.HasValue)

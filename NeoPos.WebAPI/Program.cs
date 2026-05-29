@@ -194,10 +194,7 @@ try
         {
             Console.WriteLine(">>> Running Primary Migrations (SQLite)...");
             await db.Database.MigrateAsync();
-
-            Console.WriteLine(">>> Ensuring Remote PostgreSQL is initialized...");
-            // Ensure remote PostgreSQL is also initialized
-            await NeoPos.WebAPI.Services.RemoteDatabaseInitializer.InitializeAsync(app.Services);
+            // Tenants use SQLite only — no PostgreSQL access at all.
         }
 
         Console.WriteLine(">>> Starting Tenant Bootstrap...");
