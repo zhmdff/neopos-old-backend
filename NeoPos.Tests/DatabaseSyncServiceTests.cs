@@ -1,5 +1,6 @@
 using BusinessLayer.Utilities;
 using Domain.Common.Entities;
+using Domain.Entities;
 using Microsoft.EntityFrameworkCore;
 using NeoPos.Tests.TestHelpers;
 
@@ -137,6 +138,46 @@ public class DatabaseSyncServiceTests
             .FirstOrDefaultAsync(p => p.Id == productId);
         Assert.NotNull(localProduct);
         Assert.Equal("New Pizza", localProduct!.NameAz);
+    }
+
+    [Fact]
+    public async Task TriggerSync_PullsAllLinkedUsers_IntoLocal()
+    {
+        await using var factory = await SyncTestDbFactory.CreateAsync();
+        var localCompanyId = Guid.NewGuid();
+        var masterCompanyId = Guid.NewGuid();
+        var otherCompanyId = Guid.NewGuid();
+        const string tenantKey = "linked-users";
+        var linkId = Guid.NewGuid();
+
+        factory.LocalDb.Companies.Add(TestEntityFactory.CreateCompany(localCompanyId, tenantKey));
+        factory.RemoteDb.Companies.Add(TestEntityFactory.CreateCompany(masterCompanyId, tenantKey));
+        factory.RemoteDb.Companies.Add(TestEntityFactory.CreateCompany(otherCompanyId, "other-tenant"));
+        factory.LocalDb.LocalSyncMetadata.Add(TestEntityFactory.CreateSyncMetadata(tenantKey, lastSync: DateTime.UtcNow));
+
+        var roleA = Guid.NewGuid();
+        var roleB = Guid.NewGuid();
+        factory.RemoteDb.Roles.Add(TestEntityFactory.CreateAdminRole(roleA, masterCompanyId));
+        factory.RemoteDb.Roles.Add(TestEntityFactory.CreateAdminRole(roleB, otherCompanyId));
+
+        var userA = Guid.NewGuid();
+        var userB = Guid.NewGuid();
+        factory.RemoteDb.Users.Add(TestEntityFactory.CreateUser(
+            userA, masterCompanyId, roleA, "admin", PasswordHashHelper.Hash("pass1"), linkedAccountId: linkId));
+        factory.RemoteDb.Users.Add(TestEntityFactory.CreateUser(
+            userB, otherCompanyId, roleB, "admin", "plainLegacyPass", linkedAccountId: linkId));
+        await factory.RemoteDb.SaveChangesAsync();
+        await factory.LocalDb.SaveChangesAsync();
+
+        await factory.CreateSyncService().TriggerSyncAsync();
+
+        Assert.Equal(2, await factory.LocalDb.Users.CountAsync());
+        var localB = await factory.LocalDb.Users.AsNoTracking().FirstAsync(u => u.Id == userB);
+        Assert.True(PasswordHashHelper.IsBcryptHash(localB.PasswordHash));
+        Assert.True(PasswordHashHelper.Verify("plainLegacyPass", localB.PasswordHash));
+
+        var remoteB = await factory.RemoteDb.Users.AsNoTracking().FirstAsync(u => u.Id == userB);
+        Assert.True(PasswordHashHelper.IsBcryptHash(remoteB.PasswordHash));
     }
 
     [Fact]

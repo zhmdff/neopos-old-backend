@@ -1,9 +1,7 @@
 using BusinessLayer.DTOs.PendingLineDelete;
-using BusinessLayer.Hubs;
 using BusinessLayer.Services.Abstractions;
 using DAL.Server.Context;
 using Domain.Entities;
-using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -17,21 +15,21 @@ namespace BusinessLayer.Services.Implementations;
 public class PendingLineDeleteConfirmService : IPendingLineDeleteConfirmService
 {
     private readonly AppDbContext _db;
-    private readonly IHubContext<NotificationHub> _hubContext;
-    private readonly IBossWebPushService _bossWebPush;
+    private readonly IBossLiveNotifyDispatcher _bossLiveNotify;
+    private readonly IBossMasterNotifyRelayService _bossMasterNotifyRelay;
     private readonly IConfiguration _configuration;
     private readonly ILogger<PendingLineDeleteConfirmService> _logger;
 
     public PendingLineDeleteConfirmService(
         AppDbContext db,
-        IHubContext<NotificationHub> hubContext,
-        IBossWebPushService bossWebPush,
+        IBossLiveNotifyDispatcher bossLiveNotify,
+        IBossMasterNotifyRelayService bossMasterNotifyRelay,
         IConfiguration configuration,
         ILogger<PendingLineDeleteConfirmService> logger)
     {
         _db = db;
-        _hubContext = hubContext;
-        _bossWebPush = bossWebPush;
+        _bossLiveNotify = bossLiveNotify;
+        _bossMasterNotifyRelay = bossMasterNotifyRelay;
         _configuration = configuration;
         _logger = logger;
     }
@@ -103,31 +101,29 @@ public class PendingLineDeleteConfirmService : IPendingLineDeleteConfirmService
             return;
         }
 
-        var groupKey = companyId.ToString("D").ToLowerInvariant();
-        try
-        {
-            await _hubContext.Clients.Group(groupKey).SendAsync("ReceivePendingDeleteRefresh", new { }, ct);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "SignalR ReceivePendingDeleteRefresh xətası");
-        }
+        var table = row.TableName ?? "Masa";
+        var pushTitle = "Silinmə təsdiqi";
+        var pushBody =
+            $"{table}: {row.ProductName} × {row.Quantity} — ofisiant proqramında bu çek açıq olanda «Bəli» / «Xeyr» düymələri və ya Telegram təsdiqi.";
 
         try
         {
-            var table = row.TableName ?? "Masa";
-            var body = $"{table}: {row.ProductName} × {row.Quantity} — ofisiant proqramında bu çek açıq olanda «Bəli» / «Xeyr» düymələri və ya Telegram təsdiqi.";
-            await _bossWebPush.NotifyCompanySubscribersAsync(
-                companyId,
-                "Silinmə təsdiqi",
-                body,
-                "/boss/dashboard",
-                $"neopos-pd-{pendingId}",
-                ct);
+            await _bossLiveNotify.DispatchPendingDeletePushAsync(
+                companyId, pendingId, pushTitle, pushBody, ct);
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "WebPush pending delete xətası");
+        }
+
+        try
+        {
+            await _bossMasterNotifyRelay.TryRelayPendingDeleteAsync(
+                companyId, pendingId, pushTitle, pushBody, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Boss master pending-delete relay xətası");
         }
 
         await NotifyBossTelegramChatsAsync(companyId, row, ct);
@@ -221,10 +217,9 @@ public class PendingLineDeleteConfirmService : IPendingLineDeleteConfirmService
 
         await ReplaceTelegramConfirmOutcomeAsync(companyId, row.Id, accepted, ct);
 
-        var groupKey = companyId.ToString("D").ToLowerInvariant();
         try
         {
-            await _hubContext.Clients.Group(groupKey).SendAsync("ReceivePendingDeleteRefresh", new { }, ct);
+            await _bossLiveNotify.DispatchPendingDeleteRefreshAsync(companyId, ct);
         }
         catch (Exception ex)
         {

@@ -68,4 +68,21 @@ public class ReceiptDesignPrintTests
         var text = Encoding.ASCII.GetString(bytes);
         Assert.Contains("CEK NO : 202605301200", text);
     }
+
+    [Fact]
+    public void KassaEscPos_uses_boss_default_sections_when_design_json_missing()
+    {
+        var ctx = new KassaReceiptContext
+        {
+            CompanyName = "Test Restoran",
+            WaiterName = "Ali",
+            TableName = "5",
+        };
+
+        var bytes = KassaEscPosRenderer.Render(null, ctx);
+        var text = Encoding.ASCII.GetString(bytes);
+        Assert.Contains("TEST RESTORAN", text);
+        Assert.Contains("OFISIANT: ALI", text);
+        Assert.DoesNotContain("KASSIR:", text);
+    }
 }

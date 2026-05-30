@@ -2,6 +2,7 @@
 using BusinessLayer.Services.Abstractions;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using NeoPos.WebAPI.Services;
 
 namespace NeoPos.WebAPI.Controllers;
 
@@ -11,11 +12,16 @@ public class AuthController : ControllerBase
 {
     private readonly IAuthService _authService;
     private readonly ITenantBootstrapService _tenantBootstrapService;
+    private readonly TenantMasterLoginBootstrapService _masterLoginBootstrap;
 
-    public AuthController(IAuthService authService, ITenantBootstrapService tenantBootstrapService)
+    public AuthController(
+        IAuthService authService,
+        ITenantBootstrapService tenantBootstrapService,
+        TenantMasterLoginBootstrapService masterLoginBootstrap)
     {
         _authService = authService;
         _tenantBootstrapService = tenantBootstrapService;
+        _masterLoginBootstrap = masterLoginBootstrap;
     }
 
     /// <summary>
@@ -45,9 +51,22 @@ public class AuthController : ControllerBase
             var result = await _authService.LoginAsync(request);
             return Ok(result);
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            return Unauthorized(new { message = ex.Message });
+            try
+            {
+                await _masterLoginBootstrap.TryPrepareLocalFromMasterAsync(
+                    request.Username ?? string.Empty,
+                    request.Password ?? string.Empty,
+                    HttpContext.RequestAborted);
+
+                var result = await _authService.LoginAsync(request);
+                return Ok(result);
+            }
+            catch (Exception ex)
+            {
+                return Unauthorized(new { message = ex.Message });
+            }
         }
     }
 

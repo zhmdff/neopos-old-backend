@@ -38,4 +38,20 @@ public static class PasswordHashHelper
 
         return string.Equals(plain, storedHash, StringComparison.Ordinal);
     }
+
+    /// <summary>
+    /// If legacy data stored the plain password in PasswordHash, upgrade to BCrypt (same plaintext as input).
+    /// </summary>
+    public static string NormalizeToBcrypt(string? stored)
+    {
+        if (string.IsNullOrWhiteSpace(stored))
+            return stored ?? string.Empty;
+        if (IsBcryptHash(stored))
+            return stored;
+        return Hash(stored);
+    }
+
+    /// <summary>True when stored value is legacy plaintext (not BCrypt).</summary>
+    public static bool IsLegacyPlaintext(string? stored) =>
+        !string.IsNullOrEmpty(stored) && !IsBcryptHash(stored);
 }

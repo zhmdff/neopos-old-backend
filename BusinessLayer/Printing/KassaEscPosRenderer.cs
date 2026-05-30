@@ -26,14 +26,9 @@ public static class KassaEscPosRenderer
 
     public static byte[] Render(string? receiptDesignSettingsJson, KassaReceiptContext ctx)
     {
-        if (!string.IsNullOrWhiteSpace(receiptDesignSettingsJson))
-        {
-            var root = ReceiptDesignParser.Parse(receiptDesignSettingsJson);
-            var sections = ReceiptDesignParser.NormalizeCashierSections(root);
-            return RenderSections(sections, ctx);
-        }
-
-        return RenderLegacy(ctx);
+        var root = ReceiptDesignParser.Parse(receiptDesignSettingsJson);
+        var sections = ReceiptDesignParser.NormalizeCashierSections(root);
+        return RenderSections(sections, ctx);
     }
 
     private static byte[] RenderSections(List<ReceiptDesignSection> sections, KassaReceiptContext ctx)
@@ -161,51 +156,6 @@ public static class KassaEscPosRenderer
         buf.WriteBold(false);
         buf.WriteLine("POWERED BY NEOPOS", lineWidth);
         buf.WriteAlign("left");
-        buf.WriteRawLine("");
-        buf.WriteRawLine("");
-        buf.WriteCut();
-        return buf.ToArray();
-    }
-
-    private static byte[] RenderLegacy(KassaReceiptContext ctx)
-    {
-        var buf = new EscPosBuffer();
-        var w = EscPosHelpers.DefaultWidth;
-        buf.WriteInit();
-        buf.WriteAlign("center");
-        buf.WriteBold(true);
-        buf.Write(0x1D, 0x21, 0x11);
-        WriteWrapped(buf, EscPosHelpers.SafeUpper(ctx.CompanyName), w / 2);
-        buf.Write(0x1D, 0x21, 0x00);
-        buf.WriteBold(false);
-        buf.WriteLine(EscPosHelpers.FormatDateTimeDdMmYyyyHm(DateTime.Now), w);
-        if (!string.IsNullOrWhiteSpace(ctx.KassirName))
-        {
-            buf.WriteBold(true);
-            buf.WriteLine($"KASSIR: {EscPosHelpers.SafeUpper(ctx.KassirName)}", w);
-            buf.WriteBold(false);
-        }
-        var tableCore = EscPosHelpers.NormalizeTableLabel(ctx.TableName);
-        if (!string.IsNullOrEmpty(tableCore))
-        {
-            buf.WriteBold(true);
-            buf.WriteLine($"MASA: {tableCore}", w);
-            buf.WriteBold(false);
-        }
-        WriteSplitLabel(buf, ctx.SplitLabel, w);
-        buf.WriteAlign("left");
-        RenderItemsTable(buf, new ReceiptDesignSection { Size = "sm" }, ctx.Items, ref w);
-        if (ctx.FoodTotal > 0) WriteKv(buf, "MEHSUL CEMI:", $"{EscPosHelpers.FormatMoney(ctx.FoodTotal)} AZN", w);
-        if (ctx.ServiceAmount > 0) WriteKv(buf, "SERVIS:", $"+{EscPosHelpers.FormatMoney(ctx.ServiceAmount)} AZN", w);
-        if (ctx.DiscountAmount > 0) WriteKv(buf, "ENDIRIM:", $"-{EscPosHelpers.FormatMoney(ctx.DiscountAmount)} AZN", w);
-        buf.WriteAlign("right");
-        buf.Write(0x1D, 0x21, 0x11);
-        buf.WriteBold(true);
-        buf.WriteLine($"YEKUN: {EscPosHelpers.FormatMoney(ctx.GrandTotal)} AZN", w);
-        buf.WriteBold(false);
-        buf.Write(0x1D, 0x21, 0x00);
-        buf.WriteAlign("center");
-        buf.WriteLine(ctx.ThankYouText ?? "TESEKKUR EDIRIK", w);
         buf.WriteRawLine("");
         buf.WriteRawLine("");
         buf.WriteCut();

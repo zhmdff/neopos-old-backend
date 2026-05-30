@@ -18,7 +18,10 @@ public static class DALRegistration
 
         string? remotePostgres = configuration.GetConnectionString("RemotePostgres");
         if (string.IsNullOrEmpty(remotePostgres) || remotePostgres.Contains("localhost") || remotePostgres.Contains("127.0.0.1"))
-            remotePostgres = "Host=localhost;Port=5432;Database=neopos_new_db;Username=postgres;Password=Slome2006";
+        {
+            remotePostgres = configuration.GetConnectionString("RemotePostgresLocal")
+                               ?? "Host=localhost;Port=5432;Database=neopos_sync;Username=postgres;Password=zhmdff123";
+        }
 
         // Primary database: master uses PostgreSQL, tenant uses SQLite
         service.AddDbContext<AppDbContext>(opt =>

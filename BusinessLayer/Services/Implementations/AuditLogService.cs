@@ -1,39 +1,35 @@
 using AutoMapper;
 using BusinessLayer.DTOs.Audit;
 using BusinessLayer.DTOs.Product;
-using BusinessLayer.Hubs;
-using BusinessLayer.Utilities;
 using BusinessLayer.Services.Abstractions;
+using BusinessLayer.Utilities;
 using DAL.Server.Context;
 using Domain.Entities;
-using Microsoft.AspNetCore.SignalR; // 🔥 SignalR üçün mütləq lazımdır
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+
 namespace BusinessLayer.Services.Implementations;
 
 public class AuditLogService : IAuditLogService
 {
     private readonly AppDbContext _context;
     private readonly IMapper _mapper;
-    private readonly IHubContext<NotificationHub> _hubContext; // 🔥 HubContext əlavə edildi
-    private readonly IBossWebPushService _bossWebPush;
-    private readonly IBossTelegramNotifyService _bossTelegramNotify;
+    private readonly IBossLiveNotifyDispatcher _bossLiveNotify;
+    private readonly IBossMasterNotifyRelayService _bossMasterNotifyRelay;
     private readonly ILogger<AuditLogService> _logger;
     private DateTime AzTime => DateTime.SpecifyKind(DateTime.UtcNow.AddHours(4), DateTimeKind.Unspecified);
 
     public AuditLogService(
         AppDbContext context,
         IMapper mapper,
-        IHubContext<NotificationHub> hubContext,
-        IBossWebPushService bossWebPush,
-        IBossTelegramNotifyService bossTelegramNotify,
+        IBossLiveNotifyDispatcher bossLiveNotify,
+        IBossMasterNotifyRelayService bossMasterNotifyRelay,
         ILogger<AuditLogService> logger)
     {
         _context = context;
         _mapper = mapper;
-        _hubContext = hubContext; // 🔥 Dependency Injection
-        _bossWebPush = bossWebPush;
-        _bossTelegramNotify = bossTelegramNotify;
+        _bossLiveNotify = bossLiveNotify;
+        _bossMasterNotifyRelay = bossMasterNotifyRelay;
         _logger = logger;
     }
 
@@ -52,68 +48,20 @@ public class AuditLogService : IAuditLogService
 
         try
         {
-            var groupKey = dto.CompanyId.ToString("D").ToLowerInvariant();
-            await _hubContext.Clients.Group(groupKey)
-                .SendAsync("ReceiveNotification", new
-                {
-                    title = dto.Action.ToUpper(), // Məs: "MƏHSUL SİLİNDİ ❗"
-                    body = TelegramAuditNotifyHelper.StripInternalTags(dto.Description),
-                    tableName = dto.TableName,
-                    hallName = dto.HallName,
-                    userName = dto.UserName,
-                    time = AzTime.ToString("HH:mm")
-                });
+            await _bossLiveNotify.DispatchAuditAsync(dto.CompanyId, dto);
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "SignalR bildiriş xətası");
+            _logger.LogWarning(ex, "Boss canlı bildiriş xətası");
         }
 
         try
         {
-            await _bossTelegramNotify.TryNotifyAuditAsync(
-                dto.CompanyId,
-                dto.Action ?? string.Empty,
-                dto.Description,
-                dto.UserName,
-                dto.TableName,
-                dto.HallName,
-                AzTime.ToString("HH:mm"),
-                AzTime);
+            await _bossMasterNotifyRelay.TryRelayAuditAsync(dto);
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Telegram audit bildiriş xətası");
-        }
-
-        try
-        {
-            var pushKind = TelegramAuditNotifyHelper.ClassifyKind(dto.Action, dto.Description);
-            if (!string.IsNullOrEmpty(pushKind))
-            {
-                var prefsJson = await _context.Companies.AsNoTracking()
-                    .Where(c => c.Id == dto.CompanyId)
-                    .Select(c => c.TelegramNotifyPrefsJson)
-                    .FirstOrDefaultAsync();
-                if (TelegramAuditNotifyHelper.IsKindEnabled(pushKind, prefsJson))
-                {
-                    var pushTitle = (dto.Action ?? string.Empty).ToUpperInvariant();
-                    var pushBody = TelegramAuditNotifyHelper.StripInternalTags(dto.Description);
-                    if (pushBody.Length > 280)
-                        pushBody = pushBody[..280] + "…";
-                    var tag = "neopos-boss-" + pushKind;
-                    await _bossWebPush.NotifyCompanySubscribersAsync(
-                        dto.CompanyId,
-                        pushTitle,
-                        pushBody,
-                        "/boss/audit-logs",
-                        tag);
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "WebPush audit xətası");
+            _logger.LogWarning(ex, "Boss master relay xətası");
         }
     }
 
@@ -155,7 +103,6 @@ public class AuditLogService : IAuditLogService
         if (shift == null)
             throw new Exception("Növbə tapılmadı!");
 
-        // Datada vaxtlar local(Baku) kimi saxlanır (Unspecified). Buna görə UTC çevirmirik.
         var start = shift.StartTime;
         var end = shift.EndTime ?? AzTime;
 
@@ -178,7 +125,6 @@ public class AuditLogService : IAuditLogService
         start = ReportQueryBakuTime.ToBakuWallForDbComparison(start);
         end = ReportQueryBakuTime.ToBakuWallForDbComparison(end);
 
-        // OrderService: "MƏHSUL SİLİNDİ ❗" — emoji fərqləri üçün Contains
         return await _context.AuditLogs
             .AsNoTracking()
             .Where(l => l.CompanyId == companyId)

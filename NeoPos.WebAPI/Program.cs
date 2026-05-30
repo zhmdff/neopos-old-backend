@@ -49,6 +49,8 @@ try
                   ?? builder.Configuration["NeoPos:Mode"] 
                   ?? "tenant"; // Default is tenant
     bool usePostgresAsPrimary = mode.Equals("master", StringComparison.OrdinalIgnoreCase);
+    builder.Services.AddScoped<NeoPos.WebAPI.Services.TenantMasterLoginBootstrapService>();
+
     if (!usePostgresAsPrimary)
     {
         builder.Services.AddSingleton<NeoPos.WebAPI.Services.DatabaseSyncService>();
@@ -198,6 +200,8 @@ try
         {
             Console.WriteLine(">>> Running Primary Migrations (SQLite)...");
             await db.Database.MigrateAsync();
+            await db.Database.ExecuteSqlRawAsync("PRAGMA journal_mode=WAL;");
+            await db.Database.ExecuteSqlRawAsync("PRAGMA busy_timeout=5000;");
             // Tenants use SQLite only — no PostgreSQL access at all.
         }
 

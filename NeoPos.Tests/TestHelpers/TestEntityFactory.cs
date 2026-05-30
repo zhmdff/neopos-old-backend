@@ -50,7 +50,8 @@ public static class TestEntityFactory
         Guid roleId,
         string username,
         string passwordHash,
-        bool isSynced = false) => new()
+        bool isSynced = false,
+        Guid? linkedAccountId = null) => new()
     {
         Id = id,
         CompanyId = companyId,
@@ -64,6 +65,7 @@ public static class TestEntityFactory
         CreatedAt = DateTime.UtcNow.AddDays(-10),
         CreatedBy = "Test",
         IsSynced = isSynced,
+        LinkedAccountId = linkedAccountId,
     };
 
     public static LocalSyncMetadata CreateSyncMetadata(string tenantKey, DateTime? lastSync = null) => new()

@@ -43,6 +43,17 @@ public class PasswordHashHelperTests
     }
 
     [Fact]
+    public void NormalizeToBcrypt_UpgradesPlaintext()
+    {
+        var bcrypt = PasswordHashHelper.NormalizeToBcrypt("plainPass");
+        Assert.True(PasswordHashHelper.IsBcryptHash(bcrypt));
+        Assert.True(PasswordHashHelper.Verify("plainPass", bcrypt));
+
+        var already = PasswordHashHelper.Hash("x");
+        Assert.Equal(already, PasswordHashHelper.NormalizeToBcrypt(already));
+    }
+
+    [Fact]
     public void Verify_InvalidBcrypt_ReturnsFalse_DoesNotThrow()
     {
         Assert.False(PasswordHashHelper.Verify("x", "$2a$not-a-valid-bcrypt-hash-value"));

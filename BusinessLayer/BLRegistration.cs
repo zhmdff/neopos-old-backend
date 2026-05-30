@@ -45,6 +45,12 @@ public static class BLRegistration
         services.AddScoped<IPurchaseService, PurchaseService>();
         services.AddScoped<IStockHistoryService, StockHistoryService>();
         services.AddScoped<IAuditLogService, AuditLogService>();
+        services.AddScoped<IBossLiveNotifyDispatcher, BossLiveNotifyDispatcher>();
+        services.AddScoped<IBossMasterNotifyRelayService, BossMasterNotifyRelayService>();
+        services.AddHttpClient("BossMasterNotifyRelay", client =>
+        {
+            client.Timeout = TimeSpan.FromSeconds(15);
+        });
         services.AddScoped<IBossWebPushService, BossWebPushService>();
         services.AddScoped<IBossTelegramChatService, BossTelegramChatService>();
         services.AddScoped<IBossTelegramNotifyService, BossTelegramNotifyService>();

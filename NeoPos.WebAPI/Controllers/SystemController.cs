@@ -1,5 +1,8 @@
 using Microsoft.AspNetCore.Mvc;
 using NeoPos.WebAPI.Services;
+using BusinessLayer.DTOs.System;
+using BusinessLayer.Services.Abstractions;
+using Microsoft.EntityFrameworkCore;
 
 namespace NeoPos.WebAPI.Controllers;
 
@@ -12,6 +15,7 @@ public class SystemController : ControllerBase
 {
     private readonly DAL.Server.Context.AppDbContext _localDb;
     private readonly DAL.Server.Context.RemoteDbContext? _remoteDb;
+    private readonly IBossLiveNotifyDispatcher _bossLiveNotify;
     private readonly IWebHostEnvironment _env;
     private readonly IConfiguration _configuration;
     private readonly ILogger<SystemController> _logger;
@@ -19,12 +23,14 @@ public class SystemController : ControllerBase
     public SystemController(
         DAL.Server.Context.AppDbContext localDb,
         IServiceProvider serviceProvider,
+        IBossLiveNotifyDispatcher bossLiveNotify,
         IWebHostEnvironment env,
         IConfiguration configuration,
         ILogger<SystemController> logger)
     {
         _localDb = localDb;
         _remoteDb = serviceProvider.GetService<DAL.Server.Context.RemoteDbContext>();
+        _bossLiveNotify = bossLiveNotify;
         _env = env;
         _configuration = configuration;
         _logger = logger;
@@ -177,6 +183,65 @@ public class SystemController : ControllerBase
         if (string.IsNullOrEmpty(expected))
             return false;
         return string.Equals(expected, secret?.Trim(), StringComparison.Ordinal);
+    }
+
+    [HttpPost("relay-boss-notify")]
+    public async Task<IActionResult> RelayBossNotify(
+        [FromHeader(Name = "X-NeoPos-Sync-Secret")] string? secret,
+        [FromBody] BossNotifyRelayRequestDto dto,
+        CancellationToken cancellationToken)
+    {
+        if (!ValidateMediaSyncSecret(secret))
+            return Unauthorized(new { message = "Invalid sync secret." });
+
+        var tenantKey = (dto.TenantKey ?? string.Empty).Trim();
+        if (string.IsNullOrEmpty(tenantKey))
+            return BadRequest(new { message = "TenantKey is required." });
+
+        var company = await _localDb.Companies.AsNoTracking()
+            .FirstOrDefaultAsync(c => c.TenantKey == tenantKey && !c.IsDeleted, cancellationToken);
+        if (company == null)
+            return NotFound(new { message = "Company not found for TenantKey." });
+
+        var kind = (dto.Kind ?? "audit").Trim().ToLowerInvariant();
+        try
+        {
+            switch (kind)
+            {
+                case "audit":
+                    if (dto.Audit == null)
+                        return BadRequest(new { message = "Audit payload is required." });
+                    dto.Audit.CompanyId = company.Id;
+                    await _bossLiveNotify.DispatchAuditAsync(company.Id, dto.Audit, cancellationToken);
+                    break;
+
+                case "pendingdeletepush":
+                    var push = dto.PendingDeletePush;
+                    if (push == null || string.IsNullOrWhiteSpace(push.PendingId))
+                        return BadRequest(new { message = "PendingDeletePush payload is required." });
+                    await _bossLiveNotify.DispatchPendingDeletePushAsync(
+                        company.Id,
+                        push.PendingId.Trim(),
+                        push.Title ?? "Silinmə təsdiqi",
+                        push.Body ?? string.Empty,
+                        cancellationToken);
+                    break;
+
+                case "pendingdeleterefresh":
+                    await _bossLiveNotify.DispatchPendingDeleteRefreshAsync(company.Id, cancellationToken);
+                    break;
+
+                default:
+                    return BadRequest(new { message = $"Unknown kind: {dto.Kind}" });
+            }
+
+            return Ok(new { message = "Relayed." });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "relay-boss-notify failed for TenantKey {TenantKey}", tenantKey);
+            return StatusCode(500, new { message = "Relay failed.", error = ex.Message });
+        }
     }
 
     [HttpPost("trigger-sync")]
